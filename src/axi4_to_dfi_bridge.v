@@ -59,7 +59,7 @@ module async_fifo_gray #(
     input  wire              rd_clk,
     input  wire              rd_rst_n,
     input  wire              rd_en,
-    output reg  [WIDTH-1:0]  rd_data,
+    output wire [WIDTH-1:0]  rd_data,
     output wire              rd_empty
 );
     function [PTRW-1:0] bin2gray;
@@ -87,6 +87,9 @@ module async_fifo_gray #(
     wire empty_int = (wptr_gray_rd == rptr_gray);
     assign rd_empty = empty_int;
 
+    // First-word fall-through: data valid whenever !empty (matches AXI-style valid/data).
+    assign rd_data = empty_int ? {WIDTH{1'b0}} : mem[rptr_bin[AW-1:0]];
+
     always @(posedge wr_clk or negedge wr_rst_n) begin
         if (!wr_rst_n) begin
             wptr_bin  <= {PTRW{1'b0}};
@@ -102,10 +105,8 @@ module async_fifo_gray #(
         if (!rd_rst_n) begin
             rptr_bin  <= {PTRW{1'b0}};
             rptr_gray <= {PTRW{1'b0}};
-            rd_data   <= {WIDTH{1'b0}};
         end else begin
             if (rd_en && !empty_int) begin
-                rd_data <= mem[rptr_bin[AW-1:0]];
                 rptr_bin  <= rptr_bin + 1'b1;
                 rptr_gray <= rptr_gray_next;
             end
@@ -340,6 +341,11 @@ module axi4_to_dfi_bridge #(
 
     reg wreq_rd_en_r;
     reg rreq_rd_en_r;
+    // Latch FIFO output on pop cycle; rd_data advances after rd_en so _r cycle must
+    // use this snapshot (FWFT output follows rptr and shows 0 when empty after pop).
+    reg [WREQ_W-1:0] wreq_snapshot;
+    reg [RREQ_W-1:0] rreq_snapshot;
+
     reg w_busy;
     reg [TIMER_W-1:0] w_timer;
     reg [C_AXI_ID_WIDTH-1:0] w_pending_id;
@@ -350,8 +356,8 @@ module axi4_to_dfi_bridge #(
     reg [C_AXI_DATA_WIDTH-1:0] r_capture;
 
     wire [C_AXI_ID_WIDTH-1:0] wreq_id =
-        wreq_rdata[STROBE_W+C_AXI_DATA_WIDTH+C_AXI_ADDR_WIDTH +: C_AXI_ID_WIDTH];
-    wire [C_AXI_ID_WIDTH-1:0] rreq_id = rreq_rdata[C_AXI_ADDR_WIDTH +: C_AXI_ID_WIDTH];
+        wreq_snapshot[STROBE_W+C_AXI_DATA_WIDTH+C_AXI_ADDR_WIDTH +: C_AXI_ID_WIDTH];
+    wire [C_AXI_ID_WIDTH-1:0] rreq_id = rreq_snapshot[C_AXI_ADDR_WIDTH +: C_AXI_ID_WIDTH];
 
     wire dfi_mc_ready = dfi_init_complete;
 
@@ -439,6 +445,8 @@ module axi4_to_dfi_bridge #(
             dfi_rddata_en    <= 1'b0;
             wreq_rd_en_r     <= 1'b0;
             rreq_rd_en_r     <= 1'b0;
+            wreq_snapshot    <= {WREQ_W{1'b0}};
+            rreq_snapshot    <= {RREQ_W{1'b0}};
             w_busy           <= 1'b0;
             w_timer          <= {TIMER_W{1'b0}};
             w_pending_id     <= {C_AXI_ID_WIDTH{1'b0}};
@@ -447,6 +455,10 @@ module axi4_to_dfi_bridge #(
             r_pending_id     <= {C_AXI_ID_WIDTH{1'b0}};
             r_capture        <= {C_AXI_DATA_WIDTH{1'b0}};
         end else begin
+            if (wreq_rd_en)
+                wreq_snapshot <= wreq_rdata;
+            if (rreq_rd_en)
+                rreq_snapshot <= rreq_rdata;
             wreq_rd_en_r <= wreq_rd_en;
             rreq_rd_en_r <= rreq_rd_en;
 
@@ -470,11 +482,11 @@ module axi4_to_dfi_bridge #(
                 else
                     r_timer <= r_timer - 1'b1;
             end else if (wreq_rd_en_r) begin
-                dfi_address <= wreq_rdata[C_AXI_ADDR_WIDTH-1:0];
+                dfi_address <= wreq_snapshot[C_AXI_ADDR_WIDTH-1:0];
                 if (DFI_BANK_WIDTH > 0)
-                    dfi_bank <= wreq_rdata[2 +: DFI_BANK_WIDTH];
-                dfi_wrdata <= wreq_rdata[C_AXI_DATA_WIDTH+STROBE_W-1:STROBE_W];
-                dfi_wrdata_mask <= ~wreq_rdata[STROBE_W-1:0];
+                    dfi_bank <= wreq_snapshot[2 +: DFI_BANK_WIDTH];
+                dfi_wrdata <= wreq_snapshot[C_AXI_DATA_WIDTH+STROBE_W-1:STROBE_W];
+                dfi_wrdata_mask <= ~wreq_snapshot[STROBE_W-1:0];
                 dfi_cas_n     <= 1'b0;
                 dfi_we_n      <= 1'b0;
                 dfi_cs_n      <= {DFI_CS_WIDTH{1'b0}};
@@ -483,9 +495,9 @@ module axi4_to_dfi_bridge #(
                 w_busy        <= 1'b1;
                 w_timer       <= DFI_WRITE_ACK_CYCLES[TIMER_W-1:0];
             end else if (rreq_rd_en_r) begin
-                dfi_address <= rreq_rdata[C_AXI_ADDR_WIDTH-1:0];
+                dfi_address <= rreq_snapshot[C_AXI_ADDR_WIDTH-1:0];
                 if (DFI_BANK_WIDTH > 0)
-                    dfi_bank <= rreq_rdata[2 +: DFI_BANK_WIDTH];
+                    dfi_bank <= rreq_snapshot[2 +: DFI_BANK_WIDTH];
                 dfi_cas_n     <= 1'b0;
                 dfi_we_n      <= 1'b1;
                 dfi_cs_n      <= {DFI_CS_WIDTH{1'b0}};
