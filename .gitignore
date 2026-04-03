@@ -1,0 +1,4 @@
+# Icarus Verilog / test Makefile outputs
+test/build/
+sim.vvp
+*.vvp
