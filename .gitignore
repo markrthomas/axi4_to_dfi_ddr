@@ -2,3 +2,6 @@
 test/build/
 sim.vvp
 *.vvp
+
+# Local Codex workspace artifacts
+.codex
