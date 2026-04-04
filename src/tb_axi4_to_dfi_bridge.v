@@ -530,43 +530,95 @@ module tb;
         repeat (5) @(posedge axi_aclk);
         @(negedge dfi_clk);
         dfi_rst_n = 1'b1;
-        repeat (3) @(posedge dfi_clk);
-        dfi_init_complete = 1'b1;
         repeat (3) @(posedge axi_aclk);
         axi_aresetn = 1'b1;
 
-        repeat (10) @(posedge axi_aclk);
+        repeat (4) @(posedge axi_aclk);
 
-        // --- Test 1: baseline write/read ---
+        // --- Test 1: accepted writes must not execute before DFI init completes ---
+        axi_write_single(32'h0000_0100, 4'hA, 64'hFACEFACE_00000001, 8'hFF);
+        repeat (6) begin
+            @(posedge axi_aclk);
+            if (s_axi_bvalid) begin
+                $display("FAIL: Unexpected BVALID while init is incomplete");
+                errors = errors + 1;
+            end
+        end
+        repeat (6) begin
+            @(posedge dfi_clk);
+            if (dfi_wrdata_en || dfi_rddata_en) begin
+                $display("FAIL: DFI command issued before init complete");
+                errors = errors + 1;
+            end
+        end
+        dfi_init_complete = 1'b1;
+        axi_wait_b(4'hA);
+
+        repeat (6) @(posedge axi_aclk);
+
+        // --- Test 2: unsupported requests must keep ready low ---
+        s_axi_awlen = 8'd1;
+        repeat (3) begin
+            @(posedge axi_aclk);
+            if (s_axi_awready) begin
+                $display("FAIL: AWREADY asserted for unsupported burst length");
+                errors = errors + 1;
+            end
+        end
+        s_axi_awlen = 8'd0;
+
+        s_axi_wlast = 1'b0;
+        repeat (3) begin
+            @(posedge axi_aclk);
+            if (s_axi_wready) begin
+                $display("FAIL: WREADY asserted for non-final write beat");
+                errors = errors + 1;
+            end
+        end
+        s_axi_wlast = 1'b1;
+
+        s_axi_arsize = 3'd2;
+        repeat (3) begin
+            @(posedge axi_aclk);
+            if (s_axi_arready) begin
+                $display("FAIL: ARREADY asserted for unsupported transfer size");
+                errors = errors + 1;
+            end
+        end
+        s_axi_arsize = AXI_SIZE_FULL;
+
+        repeat (4) @(posedge axi_aclk);
+
+        // --- Test 3: baseline write/read ---
         axi_write_single(32'h0000_1000, 4'h3, 64'hDEADBEEF_00000001, 8'hFF);
         axi_wait_b(4'h3);
         axi_read_single(32'h0000_1000, 4'h4);
         axi_wait_r(4'h4, expected_rdata(32'h0000_1000));
 
-        // --- Test 2: AW and W on separate cycles ---
+        // --- Test 4: AW and W on separate cycles ---
         axi_write_aw_then_w(32'h0000_2008, 4'h1, 64'hCAFEBABE_12345678, 8'hFF);
         axi_wait_b(4'h1);
         axi_read_single(32'h0000_2008, 4'h2);
         axi_wait_r(4'h2, expected_rdata(32'h0000_2008));
 
-        // --- Test 3: W can arrive before AW ---
+        // --- Test 5: W can arrive before AW ---
         axi_write_w_then_aw(32'h0000_3010, 4'h5, 64'h11223344_55667788, 8'hF0);
         axi_wait_b(4'h5);
 
-        // --- Test 4: B channel holds valid/data stable under backpressure ---
+        // --- Test 6: B channel holds valid/data stable under backpressure ---
         axi_write_single(32'h0000_4000, 4'h6, 64'hABCDEF00_00000001, 8'hFF);
         axi_write_single(32'h0000_4008, 4'h7, 64'hABCDEF00_00000002, 8'hFF);
         axi_wait_b_stall(4'h6, 4);
         axi_wait_b(4'h7);
 
-        // --- Test 5: R channel holds valid/data stable under backpressure ---
+        // --- Test 7: R channel holds valid/data stable under backpressure ---
         axi_read_single(32'h0000_5000, 4'h8);
         axi_wait_r_stall(4'h8, expected_rdata(32'h0000_5000), 4);
 
         repeat (20) @(posedge axi_aclk);
 
         if (errors == 0)
-            $display("PASS: tb_axi4_to_dfi_bridge (write ordering + backpressure checks)");
+            $display("PASS: tb_axi4_to_dfi_bridge (init gating + unsupported transfer stalls + backpressure checks)");
         else
             $display("FAIL: tb_axi4_to_dfi_bridge errors=%0d", errors);
         $finish;

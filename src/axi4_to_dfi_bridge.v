@@ -12,9 +12,10 @@
 //   - dfi_clk  / dfi_rst_n   : DFI-side timing (often 1:1 or ratioed to DRAM)
 //
 // Functional note: This module provides correct AXI4 handshaking, CDC, and
-// legal idle DFI command encoding. DRAM command sequencing (ACT/PRE/REF),
-// timing, and per-PHY phasing (DFI P0..P3) are system-specific; extend the
-// dfi_* drive logic for a full controller.
+// legal idle DFI command encoding for the supported request profile.
+// DRAM command sequencing (ACT/PRE/REF), timing, and per-PHY phasing
+// (DFI P0..P3) are system-specific; extend the dfi_* drive logic for a full
+// controller.
 //=============================================================================
 
 `timescale 1ns / 1ps
@@ -379,7 +380,15 @@ module axi4_to_dfi_bridge #(
         wreq_snapshot[STROBE_W+C_AXI_DATA_WIDTH+C_AXI_ADDR_WIDTH +: C_AXI_ID_WIDTH];
     wire [C_AXI_ID_WIDTH-1:0] rreq_id = rreq_snapshot[C_AXI_ADDR_WIDTH +: C_AXI_ID_WIDTH];
 
-    wire dfi_mc_ready = dfi_init_complete;
+    wire [0:0] dfi_init_complete_sync;
+    wire dfi_mc_ready = dfi_init_complete_sync[0];
+
+    cdc_sync #(.WIDTH(1)) u_sync_dfi_init_complete (
+        .dst_clk  (dfi_clk),
+        .dst_rst_n(dfi_rst_n),
+        .d        ({dfi_init_complete}),
+        .q        (dfi_init_complete_sync)
+    );
 
     assign wreq_rd_en = dfi_mc_ready && !w_busy && !r_busy && !wreq_rd_en_r &&
                         !wreq_empty && !bresp_full;
