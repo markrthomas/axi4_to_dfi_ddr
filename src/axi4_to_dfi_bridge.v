@@ -80,8 +80,10 @@ module async_fifo_gray #(
     wire [PTRW-1:0] wptr_gray_next = bin2gray(wptr_bin + 1'b1);
     wire [PTRW-1:0] rptr_gray_next = bin2gray(rptr_bin + 1'b1);
 
-    wire full_int =
-        (wptr_gray_next == {~rptr_gray_wr[PTRW-1:PTRW-2], rptr_gray_wr[PTRW-3:0]});
+    wire [PTRW-1:0] wptr_full_cmp =
+        (PTRW > 2) ? {~rptr_gray_wr[PTRW-1:PTRW-2], rptr_gray_wr[PTRW-3:0]} :
+                     {~rptr_gray_wr[PTRW-1:PTRW-2]};
+    wire full_int = (wptr_gray_next == wptr_full_cmp);
     assign wr_full = full_int;
 
     wire empty_int = (wptr_gray_rd == rptr_gray);
@@ -278,8 +280,6 @@ module axi4_to_dfi_bridge #(
     wire ar_ok = (s_axi_arburst == 2'b01) && (s_axi_arlen == 8'd0) &&
                  (s_axi_arsize == $clog2(C_AXI_DATA_WIDTH/8));
 
-    wire [WREQ_W-1:0] wreq_push_vec = {1'b0, s_axi_awid, s_axi_awaddr, s_axi_wdata, s_axi_wstrb};
-
     wire wreq_full;
     wire wreq_empty;
     wire wreq_rd_en;
@@ -290,13 +290,33 @@ module axi4_to_dfi_bridge #(
     wire rreq_rd_en;
     wire [RREQ_W-1:0] rreq_rdata;
 
-    wire wr_accept = s_axi_awvalid && s_axi_wvalid && s_axi_wlast && aw_ok &&
-                     !wreq_full && s_axi_bready;
+    reg aw_hold_valid;
+    reg [C_AXI_ID_WIDTH-1:0] aw_hold_id;
+    reg [C_AXI_ADDR_WIDTH-1:0] aw_hold_addr;
+    reg w_hold_valid;
+    reg [C_AXI_DATA_WIDTH-1:0] w_hold_data;
+    reg [STROBE_W-1:0] w_hold_strb;
 
-    assign s_axi_awready = wr_accept;
-    assign s_axi_wready  = wr_accept;
+    wire aw_fire = s_axi_awvalid && s_axi_awready;
+    wire w_fire  = s_axi_wvalid && s_axi_wready;
 
-    wire wreq_wr_en = wr_accept;
+    wire aw_pair_valid = aw_hold_valid || aw_fire;
+    wire w_pair_valid  = w_hold_valid || w_fire;
+
+    wire [C_AXI_ID_WIDTH-1:0] aw_pair_id =
+        aw_hold_valid ? aw_hold_id : s_axi_awid;
+    wire [C_AXI_ADDR_WIDTH-1:0] aw_pair_addr =
+        aw_hold_valid ? aw_hold_addr : s_axi_awaddr;
+    wire [C_AXI_DATA_WIDTH-1:0] w_pair_data =
+        w_hold_valid ? w_hold_data : s_axi_wdata;
+    wire [STROBE_W-1:0] w_pair_strb =
+        w_hold_valid ? w_hold_strb : s_axi_wstrb;
+
+    wire wreq_wr_en = aw_pair_valid && w_pair_valid && !wreq_full;
+    wire [WREQ_W-1:0] wreq_push_vec = {1'b0, aw_pair_id, aw_pair_addr, w_pair_data, w_pair_strb};
+
+    assign s_axi_awready = !aw_hold_valid && aw_ok;
+    assign s_axi_wready  = !w_hold_valid && s_axi_wlast;
     async_fifo_gray #(
         .WIDTH (WREQ_W),
         .DEPTH (CDC_FIFO_DEPTH)
@@ -361,14 +381,18 @@ module axi4_to_dfi_bridge #(
 
     wire dfi_mc_ready = dfi_init_complete;
 
-    assign wreq_rd_en = dfi_mc_ready && !w_busy && !r_busy && !wreq_rd_en_r && !wreq_empty;
+    assign wreq_rd_en = dfi_mc_ready && !w_busy && !r_busy && !wreq_rd_en_r &&
+                        !wreq_empty && !bresp_full;
     assign rreq_rd_en = dfi_mc_ready && !w_busy && !r_busy && !rreq_rd_en_r &&
-                        wreq_empty && !rreq_empty;
+                        wreq_empty && !rreq_empty && !rresp_full;
 
-    wire bresp_wr_en = w_busy && (w_timer == 1);
+    wire bresp_full;
+    wire rresp_full;
+
+    wire bresp_wr_en = w_busy && (w_timer == 1) && !bresp_full;
     wire [BRESP_FIFO_W-1:0] bresp_wr_data = w_pending_id;
 
-    wire rresp_wr_en = r_busy && (r_timer == 1);
+    wire rresp_wr_en = r_busy && (r_timer == 1) && !rresp_full;
     wire [RRESP_FIFO_W-1:0] rresp_wr_data = {r_pending_id, r_capture};
 
     wire bresp_rd_en;
@@ -379,9 +403,6 @@ module axi4_to_dfi_bridge #(
     wire rresp_empty;
     wire [RRESP_FIFO_W-1:0] rresp_rdata;
 
-    wire unused_bresp_full;
-    wire unused_rresp_full;
-
     async_fifo_gray #(
         .WIDTH (BRESP_FIFO_W),
         .DEPTH (CDC_FIFO_DEPTH)
@@ -390,7 +411,7 @@ module axi4_to_dfi_bridge #(
         .wr_rst_n (dfi_rst_n),
         .wr_en    (bresp_wr_en),
         .wr_data  (bresp_wr_data),
-        .wr_full  (unused_bresp_full),
+        .wr_full  (bresp_full),
         .rd_clk   (axi_aclk),
         .rd_rst_n (axi_aresetn),
         .rd_en    (bresp_rd_en),
@@ -406,7 +427,7 @@ module axi4_to_dfi_bridge #(
         .wr_rst_n (dfi_rst_n),
         .wr_en    (rresp_wr_en),
         .wr_data  (rresp_wr_data),
-        .wr_full  (unused_rresp_full),
+        .wr_full  (rresp_full),
         .rd_clk   (axi_aclk),
         .rd_rst_n (axi_aresetn),
         .rd_en    (rresp_rd_en),
@@ -427,6 +448,33 @@ module axi4_to_dfi_bridge #(
     assign s_axi_ruser = {C_AXI_RUSER_WIDTH{1'b0}};
     assign s_axi_rvalid = !rresp_empty;
     assign rresp_rd_en = s_axi_rvalid && s_axi_rready;
+
+    always @(posedge axi_aclk or negedge axi_aresetn) begin
+        if (!axi_aresetn) begin
+            aw_hold_valid <= 1'b0;
+            aw_hold_id    <= {C_AXI_ID_WIDTH{1'b0}};
+            aw_hold_addr  <= {C_AXI_ADDR_WIDTH{1'b0}};
+            w_hold_valid  <= 1'b0;
+            w_hold_data   <= {C_AXI_DATA_WIDTH{1'b0}};
+            w_hold_strb   <= {STROBE_W{1'b0}};
+        end else begin
+            if (wreq_wr_en) begin
+                aw_hold_valid <= 1'b0;
+                w_hold_valid  <= 1'b0;
+            end else begin
+                if (aw_fire) begin
+                    aw_hold_valid <= 1'b1;
+                    aw_hold_id    <= s_axi_awid;
+                    aw_hold_addr  <= s_axi_awaddr;
+                end
+                if (w_fire) begin
+                    w_hold_valid <= 1'b1;
+                    w_hold_data  <= s_axi_wdata;
+                    w_hold_strb  <= s_axi_wstrb;
+                end
+            end
+        end
+    end
 
     always @(posedge dfi_clk or negedge dfi_rst_n) begin
         if (!dfi_rst_n) begin
@@ -470,16 +518,16 @@ module axi4_to_dfi_bridge #(
             dfi_rddata_en <= 1'b0;
 
             if (w_busy) begin
-                if (w_timer == 1)
+                if ((w_timer == 1) && !bresp_full)
                     w_busy <= 1'b0;
-                else
+                else if (w_timer != 1)
                     w_timer <= w_timer - 1'b1;
             end else if (r_busy) begin
                 if (dfi_rddata_valid)
                     r_capture <= dfi_rddata[C_AXI_DATA_WIDTH-1:0];
-                if (r_timer == 1)
+                if ((r_timer == 1) && !rresp_full)
                     r_busy <= 1'b0;
-                else
+                else if (r_timer != 1)
                     r_timer <= r_timer - 1'b1;
             end else if (wreq_rd_en_r) begin
                 dfi_address <= wreq_snapshot[C_AXI_ADDR_WIDTH-1:0];

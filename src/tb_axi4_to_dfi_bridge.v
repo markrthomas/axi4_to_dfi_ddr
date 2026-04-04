@@ -204,15 +204,20 @@ module tb;
     end
 
     //-------------------------------------------------------------------------
-    // Last AR address seen on AXI (scoreboard; avoids sampling DFI addr races).
+    // Queue AR addresses so the PHY model returns data for reads in issue order.
     //-------------------------------------------------------------------------
-    reg [C_AXI_ADDR_WIDTH-1:0] tb_last_read_addr;
+    reg [C_AXI_ADDR_WIDTH-1:0] tb_read_addr_q [0:15];
+    integer tb_read_addr_wr_ptr;
+    integer tb_read_addr_rd_ptr;
 
     always @(posedge axi_aclk or negedge axi_aresetn) begin
-        if (!axi_aresetn)
-            tb_last_read_addr <= {C_AXI_ADDR_WIDTH{1'b0}};
-        else if (s_axi_arvalid && s_axi_arready)
-            tb_last_read_addr <= s_axi_araddr;
+        if (!axi_aresetn) begin
+            tb_read_addr_wr_ptr <= 0;
+            tb_read_addr_rd_ptr <= 0;
+        end else if (s_axi_arvalid && s_axi_arready) begin
+            tb_read_addr_q[tb_read_addr_wr_ptr[3:0]] <= s_axi_araddr;
+            tb_read_addr_wr_ptr <= tb_read_addr_wr_ptr + 1;
+        end
     end
 
     //-------------------------------------------------------------------------
@@ -230,7 +235,9 @@ module tb;
             phy_rd_pipe <= {phy_rd_pipe[1:0], dfi_rddata_en};
             if (phy_rd_pipe[2]) begin
                 dfi_rddata_valid <= 1'b1;
-                dfi_rddata <= {32'hA5A5A5A5, 14'h0, tb_last_read_addr[DFI_ADDR_WIDTH-1:0]};
+                dfi_rddata <= {32'hA5A5A5A5, 14'h0,
+                               tb_read_addr_q[tb_read_addr_rd_ptr[3:0]][DFI_ADDR_WIDTH-1:0]};
+                tb_read_addr_rd_ptr <= tb_read_addr_rd_ptr + 1;
             end
         end
     end
@@ -279,7 +286,7 @@ module tb;
     endtask
 
     //-------------------------------------------------------------------------
-    // Single-beat write (AW+W same cycle as DUT allows)
+    // Single-beat write helpers
     //-------------------------------------------------------------------------
     task axi_write_single;
         input [C_AXI_ADDR_WIDTH-1:0] addr;
@@ -287,8 +294,6 @@ module tb;
         input [C_AXI_DATA_WIDTH-1:0]   data;
         input [STROBE_W-1:0]           strb;
         begin
-            // DUT gates AW/W on BREADY; B is not valid during address/data phase.
-            s_axi_bready  = 1'b1;
             s_axi_awid    = id;
             s_axi_awaddr  = addr;
             s_axi_wdata   = data;
@@ -301,7 +306,60 @@ module tb;
                 @(posedge axi_aclk);
             s_axi_awvalid = 1'b0;
             s_axi_wvalid  = 1'b0;
-            s_axi_bready  = 1'b0;
+        end
+    endtask
+
+    task axi_write_aw_then_w;
+        input [C_AXI_ADDR_WIDTH-1:0] addr;
+        input [C_AXI_ID_WIDTH-1:0]     id;
+        input [C_AXI_DATA_WIDTH-1:0]   data;
+        input [STROBE_W-1:0]           strb;
+        begin
+            s_axi_awid    = id;
+            s_axi_awaddr  = addr;
+            s_axi_awvalid = 1'b1;
+            @(posedge axi_aclk);
+            while (!s_axi_awready)
+                @(posedge axi_aclk);
+            s_axi_awvalid = 1'b0;
+
+            repeat (2) @(posedge axi_aclk);
+
+            s_axi_wdata   = data;
+            s_axi_wstrb   = strb;
+            s_axi_wlast   = 1'b1;
+            s_axi_wvalid  = 1'b1;
+            @(posedge axi_aclk);
+            while (!s_axi_wready)
+                @(posedge axi_aclk);
+            s_axi_wvalid  = 1'b0;
+        end
+    endtask
+
+    task axi_write_w_then_aw;
+        input [C_AXI_ADDR_WIDTH-1:0] addr;
+        input [C_AXI_ID_WIDTH-1:0]     id;
+        input [C_AXI_DATA_WIDTH-1:0]   data;
+        input [STROBE_W-1:0]           strb;
+        begin
+            s_axi_wdata   = data;
+            s_axi_wstrb   = strb;
+            s_axi_wlast   = 1'b1;
+            s_axi_wvalid  = 1'b1;
+            @(posedge axi_aclk);
+            while (!s_axi_wready)
+                @(posedge axi_aclk);
+            s_axi_wvalid  = 1'b0;
+
+            repeat (2) @(posedge axi_aclk);
+
+            s_axi_awid    = id;
+            s_axi_awaddr  = addr;
+            s_axi_awvalid = 1'b1;
+            @(posedge axi_aclk);
+            while (!s_axi_awready)
+                @(posedge axi_aclk);
+            s_axi_awvalid = 1'b0;
         end
     endtask
 
@@ -321,6 +379,42 @@ module tb;
             s_axi_bready = 1'b1;
             @(posedge axi_aclk);
             s_axi_bready = 1'b0;
+        end
+    endtask
+
+    task axi_wait_b_stall;
+        input [C_AXI_ID_WIDTH-1:0] exp_id;
+        input integer stall_cycles;
+        integer i;
+        reg [C_AXI_ID_WIDTH-1:0] held_bid;
+        begin
+            while (!s_axi_bvalid)
+                @(posedge axi_aclk);
+            held_bid = s_axi_bid;
+            for (i = 0; i < stall_cycles; i = i + 1) begin
+                if (!s_axi_bvalid) begin
+                    $display("FAIL: BVALID dropped during backpressure");
+                    errors = errors + 1;
+                end
+                if (s_axi_bid !== held_bid) begin
+                    $display("FAIL: BID changed under backpressure exp %h got %h", held_bid, s_axi_bid);
+                    errors = errors + 1;
+                end
+                @(posedge axi_aclk);
+            end
+            if (held_bid !== exp_id) begin
+                $display("FAIL: BID mismatch exp %h got %h", exp_id, held_bid);
+                errors = errors + 1;
+            end
+            if (s_axi_bresp !== 2'b00) begin
+                $display("FAIL: BRESP not OKAY: %b", s_axi_bresp);
+                errors = errors + 1;
+            end
+            s_axi_bready = 1'b1;
+            @(posedge axi_aclk);
+            s_axi_bready = 1'b0;
+            while (s_axi_bvalid && (s_axi_bid === held_bid))
+                @(posedge axi_aclk);
         end
     endtask
 
@@ -369,6 +463,57 @@ module tb;
         end
     endtask
 
+    task axi_wait_r_stall;
+        input [C_AXI_ID_WIDTH-1:0]     exp_id;
+        input [C_AXI_DATA_WIDTH-1:0]   exp_data;
+        input integer stall_cycles;
+        integer i;
+        reg [C_AXI_ID_WIDTH-1:0] held_rid;
+        reg [C_AXI_DATA_WIDTH-1:0] held_rdata;
+        begin
+            while (!s_axi_rvalid)
+                @(posedge axi_aclk);
+            held_rid   = s_axi_rid;
+            held_rdata = s_axi_rdata;
+            for (i = 0; i < stall_cycles; i = i + 1) begin
+                if (!s_axi_rvalid) begin
+                    $display("FAIL: RVALID dropped during backpressure");
+                    errors = errors + 1;
+                end
+                if (s_axi_rid !== held_rid) begin
+                    $display("FAIL: RID changed under backpressure exp %h got %h", held_rid, s_axi_rid);
+                    errors = errors + 1;
+                end
+                if (s_axi_rdata !== held_rdata) begin
+                    $display("FAIL: RDATA changed under backpressure exp %h got %h", held_rdata, s_axi_rdata);
+                    errors = errors + 1;
+                end
+                @(posedge axi_aclk);
+            end
+            if (held_rid !== exp_id) begin
+                $display("FAIL: RID mismatch exp %h got %h", exp_id, held_rid);
+                errors = errors + 1;
+            end
+            if (held_rdata !== exp_data) begin
+                $display("FAIL: RDATA mismatch exp %h got %h", exp_data, held_rdata);
+                errors = errors + 1;
+            end
+            if (s_axi_rresp !== 2'b00) begin
+                $display("FAIL: RRESP not OKAY: %b", s_axi_rresp);
+                errors = errors + 1;
+            end
+            if (s_axi_rlast !== 1'b1) begin
+                $display("FAIL: RLAST not set");
+                errors = errors + 1;
+            end
+            s_axi_rready = 1'b1;
+            @(posedge axi_aclk);
+            s_axi_rready = 1'b0;
+            while (s_axi_rvalid && (s_axi_rid === held_rid) && (s_axi_rdata === held_rdata))
+                @(posedge axi_aclk);
+        end
+    endtask
+
     initial begin
         errors = 0;
         axi_aresetn = 1'b0;
@@ -392,22 +537,36 @@ module tb;
 
         repeat (10) @(posedge axi_aclk);
 
-        // --- Test 1: write then read same line ---
+        // --- Test 1: baseline write/read ---
         axi_write_single(32'h0000_1000, 4'h3, 64'hDEADBEEF_00000001, 8'hFF);
         axi_wait_b(4'h3);
         axi_read_single(32'h0000_1000, 4'h4);
         axi_wait_r(4'h4, expected_rdata(32'h0000_1000));
 
-        // --- Test 2: another address ---
-        axi_write_single(32'h0000_2008, 4'h1, 64'hCAFEBABE_12345678, 8'hFF);
+        // --- Test 2: AW and W on separate cycles ---
+        axi_write_aw_then_w(32'h0000_2008, 4'h1, 64'hCAFEBABE_12345678, 8'hFF);
         axi_wait_b(4'h1);
         axi_read_single(32'h0000_2008, 4'h2);
         axi_wait_r(4'h2, expected_rdata(32'h0000_2008));
 
+        // --- Test 3: W can arrive before AW ---
+        axi_write_w_then_aw(32'h0000_3010, 4'h5, 64'h11223344_55667788, 8'hF0);
+        axi_wait_b(4'h5);
+
+        // --- Test 4: B channel holds valid/data stable under backpressure ---
+        axi_write_single(32'h0000_4000, 4'h6, 64'hABCDEF00_00000001, 8'hFF);
+        axi_write_single(32'h0000_4008, 4'h7, 64'hABCDEF00_00000002, 8'hFF);
+        axi_wait_b_stall(4'h6, 4);
+        axi_wait_b(4'h7);
+
+        // --- Test 5: R channel holds valid/data stable under backpressure ---
+        axi_read_single(32'h0000_5000, 4'h8);
+        axi_wait_r_stall(4'h8, expected_rdata(32'h0000_5000), 4);
+
         repeat (20) @(posedge axi_aclk);
 
         if (errors == 0)
-            $display("PASS: tb_axi4_to_dfi_bridge (basic write/read checks)");
+            $display("PASS: tb_axi4_to_dfi_bridge (write ordering + backpressure checks)");
         else
             $display("FAIL: tb_axi4_to_dfi_bridge errors=%0d", errors);
         $finish;
