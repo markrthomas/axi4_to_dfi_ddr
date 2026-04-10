@@ -214,7 +214,9 @@ module tb;
         if (!axi_aresetn) begin
             tb_read_addr_wr_ptr <= 0;
             tb_read_addr_rd_ptr <= 0;
-        end else if (s_axi_arvalid && s_axi_arready) begin
+        end else if (s_axi_arvalid && s_axi_arready &&
+                     (s_axi_arburst == 2'b01) && (s_axi_arlen == 8'd0) &&
+                     (s_axi_arsize == AXI_SIZE_FULL)) begin
             tb_read_addr_q[tb_read_addr_wr_ptr[3:0]] <= s_axi_araddr;
             tb_read_addr_wr_ptr <= tb_read_addr_wr_ptr + 1;
         end
@@ -556,36 +558,80 @@ module tb;
 
         repeat (6) @(posedge axi_aclk);
 
-        // --- Test 2: unsupported requests must keep ready low ---
-        s_axi_awlen = 8'd1;
-        repeat (3) begin
+        // --- Test 2: unsupported requests must complete with SLVERR ---
+        s_axi_awid    = 4'hC;
+        s_axi_awaddr  = 32'h0000_0200;
+        s_axi_awlen   = 8'd1;
+        s_axi_awvalid = 1'b1;
+        @(posedge axi_aclk);
+        while (!s_axi_awready)
             @(posedge axi_aclk);
-            if (s_axi_awready) begin
-                $display("FAIL: AWREADY asserted for unsupported burst length");
-                errors = errors + 1;
-            end
-        end
-        s_axi_awlen = 8'd0;
+        s_axi_awvalid = 1'b0;
 
-        s_axi_wlast = 1'b0;
-        repeat (3) begin
+        s_axi_wdata   = 64'h11112222_33334444;
+        s_axi_wstrb   = 8'hFF;
+        s_axi_wlast   = 1'b0;
+        s_axi_wvalid  = 1'b1;
+        @(posedge axi_aclk);
+        while (!s_axi_wready)
             @(posedge axi_aclk);
-            if (s_axi_wready) begin
-                $display("FAIL: WREADY asserted for non-final write beat");
-                errors = errors + 1;
-            end
-        end
-        s_axi_wlast = 1'b1;
+        s_axi_wvalid  = 1'b0;
 
-        s_axi_arsize = 3'd2;
-        repeat (3) begin
+        s_axi_wdata   = 64'h55556666_77778888;
+        s_axi_wstrb   = 8'hFF;
+        s_axi_wlast   = 1'b1;
+        s_axi_wvalid  = 1'b1;
+        @(posedge axi_aclk);
+        while (!s_axi_wready)
             @(posedge axi_aclk);
-            if (s_axi_arready) begin
-                $display("FAIL: ARREADY asserted for unsupported transfer size");
-                errors = errors + 1;
-            end
+        s_axi_wvalid  = 1'b0;
+        s_axi_awlen   = 8'd0;
+
+        while (!s_axi_bvalid)
+            @(posedge axi_aclk);
+        if (s_axi_bid !== 4'hC) begin
+            $display("FAIL: BID mismatch exp %h got %h", 4'hC, s_axi_bid);
+            errors = errors + 1;
         end
-        s_axi_arsize = AXI_SIZE_FULL;
+        if (s_axi_bresp !== 2'b10) begin
+            $display("FAIL: BRESP mismatch exp %b got %b", 2'b10, s_axi_bresp);
+            errors = errors + 1;
+        end
+        s_axi_bready = 1'b1;
+        @(posedge axi_aclk);
+        s_axi_bready = 1'b0;
+
+        s_axi_arid    = 4'hD;
+        s_axi_araddr  = 32'h0000_0210;
+        s_axi_arsize  = 3'd2;
+        s_axi_arvalid = 1'b1;
+        @(posedge axi_aclk);
+        while (!s_axi_arready)
+            @(posedge axi_aclk);
+        s_axi_arvalid = 1'b0;
+        s_axi_arsize  = AXI_SIZE_FULL;
+
+        while (!s_axi_rvalid)
+            @(posedge axi_aclk);
+        if (s_axi_rid !== 4'hD) begin
+            $display("FAIL: RID mismatch exp %h got %h", 4'hD, s_axi_rid);
+            errors = errors + 1;
+        end
+        if (s_axi_rdata !== {C_AXI_DATA_WIDTH{1'b0}}) begin
+            $display("FAIL: RDATA mismatch exp %h got %h", {C_AXI_DATA_WIDTH{1'b0}}, s_axi_rdata);
+            errors = errors + 1;
+        end
+        if (s_axi_rresp !== 2'b10) begin
+            $display("FAIL: RRESP mismatch exp %b got %b", 2'b10, s_axi_rresp);
+            errors = errors + 1;
+        end
+        if (s_axi_rlast !== 1'b1) begin
+            $display("FAIL: RLAST not set");
+            errors = errors + 1;
+        end
+        s_axi_rready = 1'b1;
+        @(posedge axi_aclk);
+        s_axi_rready = 1'b0;
 
         repeat (4) @(posedge axi_aclk);
 
@@ -618,7 +664,7 @@ module tb;
         repeat (20) @(posedge axi_aclk);
 
         if (errors == 0)
-            $display("PASS: tb_axi4_to_dfi_bridge (init gating + unsupported transfer stalls + backpressure checks)");
+            $display("PASS: tb_axi4_to_dfi_bridge (init gating + unsupported request errors + backpressure checks)");
         else
             $display("FAIL: tb_axi4_to_dfi_bridge errors=%0d", errors);
         $finish;
