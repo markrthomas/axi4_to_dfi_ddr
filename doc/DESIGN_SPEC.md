@@ -72,22 +72,38 @@ axi_aclk domain                         dfi_clk domain
 
 On the cycle a request FIFO **`rd_en`** is asserted, the read pointer advances after the posedge; the combinational FWFT output can change immediately. The bridge latches **`wreq_snapshot`** / **`rreq_snapshot`** when **`wreq_rd_en`** / **`rreq_rd_en`** is true and uses those registers on the following cycle (**`*_rd_en_r`**) to unpack ID, address, and write data. This avoids consuming an inconsistent beat.
 
+## 3.5 Memory controller scheduler (dfi_clk)
+
+A **single-transaction** SDRAM-style **open-page** FSM drives `dfi_*` (one AXI-equivalent request at a time).
+
+**Address decode** (LSBs of the AXI address): `col` = `[MC_COL_BITS-1:0]`, `row` = `[MC_COL_BITS +: MC_ROW_BITS]`, `bank` = `[MC_COL_BITS+MC_ROW_BITS +: DFI_BANK_WIDTH]`. Require the sum of those field widths to be at most `C_AXI_ADDR_WIDTH`.
+
+**Per bank:** `row_open_mask` and `open_row_mem[bank]` track the activated row. Sequences:
+
+1. Bank idle: **ACT** (row on `dfi_address`), wait **MC_T_RCD**, then **READ** or **WRITE** CAS (column on `dfi_address`).
+2. Same open row: **CAS only**.
+3. Different open row: **PRE**, wait **MC_T_RP**, then **ACT**, wait **MC_T_RCD**, then **CAS**.
+
+**Timing (dfi_clk cycles):** `MC_T_RP`, `MC_T_RCD`, `MC_CL` (read CAS to read-data phase), `DFI_WRITE_ACK_CYCLES` (after WRITE CAS to B push), `MC_RD_DV_MAX` (valid wait after `MC_CL`).
+
+**Not in this block:** refresh, tRAS/tWR checks, DFI P0-P3 phasing.
+
 # 4. Data paths
 
 ## 4.1 Write path (supported transfers)
 
 1. **AXI**: When AW and W present a **legal** single-beat write (`aw_ok`, `WLAST` aligned with `AWLEN == 0`, full bus `AWSIZE`, INCR `AWBURST`), the bridge may push a packed word into **`u_fifo_wreq`** on `axi_aclk`.
 2. **Pack format** (`WREQ_W` bits): reserved bit, `AWID`, `AWADDR`, `WDATA`, `WSTRB`.
-3. **DFI**: On `dfi_clk`, the sequencer pops the FIFO, drives a simplified DDR-style write command (e.g. CAS/WE pattern) and `dfi_wrdata` / `dfi_wrdata_mask` / `dfi_wrdata_en` for one cycle (illustrative).
-4. **Response**: After **`DFI_WRITE_ACK_CYCLES`** counts down on `dfi_clk`, the bridge pushes **`AWID`** into **`u_fifo_bresp`**. The AXI domain pops this FIFO to assert **`BVALID`** with **`BRESP = OKAY`**.
+3. **DFI**: The memory-controller FSM (section 3.5) may issue **PRE/ACT** before a **WRITE** CAS; `dfi_wrdata` / `dfi_wrdata_mask` / `dfi_wrdata_en` align with the WRITE CAS cycle.
+4. **Response**: After the post-WRITE wait (**`DFI_WRITE_ACK_CYCLES`**) on `dfi_clk`, the bridge pushes **`AWID`** into **`u_fifo_bresp`**. The AXI domain pops this FIFO to assert **`BVALID`** with **`BRESP = OKAY`**.
 
 AW/W **holding registers** allow address and data to arrive in separate cycles before a matching pair is pushed.
 
 ## 4.2 Read path (supported transfers)
 
 1. **AXI**: Legal AR (`ar_ok`) pushes `{ARID, ARADDR}` into **`u_fifo_rreq`**.
-2. **DFI**: Pop issues a simplified read command and asserts **`dfi_rddata_en`** for one cycle.
-3. **Data**: **`r_capture`** is updated when **`dfi_rddata_valid`** is seen during the read countdown; after **`DFI_READ_DATA_CYCLES`**, `{ARID, r_capture}` is pushed to **`u_fifo_rresp`**.
+2. **DFI**: The FSM may issue **PRE/ACT** before a **READ** CAS; **`dfi_rddata_en`** is asserted for one cycle on the READ CAS.
+3. **Data**: After **`MC_CL`**, the FSM waits in a read-data window for **`dfi_rddata_valid`** (timeout **`MC_RD_DV_MAX`**); then **`r_capture`** is pushed with **`ARID`** to **`u_fifo_rresp`** via a one-cycle **`ST_PULSE_R`**.
 4. **AXI**: Pop yields **`RVALID`**, **`RLAST = 1`**, **`RRESP = OKAY`** for this single-beat design.
 
 ## 4.3 Arbitration
@@ -122,15 +138,19 @@ Exact decode conditions are defined in **`src/axi4_to_dfi_bridge.v`** (combinati
 | `C_AXI_*` | AXI address/data/ID/user widths. |
 | `DFI_*` | DFI address, bank, data, mask, CS, ODT, CKE widths. |
 | `CDC_FIFO_DEPTH` | Depth of all four gray FIFOs in the bridge. |
-| `DFI_WRITE_ACK_CYCLES` | DFI-clock cycles from write beat to B push. |
-| `DFI_READ_DATA_CYCLES` | DFI-clock cycles for read turnaround before R push. |
+| `DFI_WRITE_ACK_CYCLES` | DFI-clock cycles after WRITE CAS to B push. |
+| `DFI_READ_DATA_CYCLES` | Reserved / legacy; read path uses `MC_CL` and `MC_RD_DV_MAX`. |
+| `MC_COL_BITS`, `MC_ROW_BITS` | Address field sizes for bank/row/col decode. |
+| `MC_T_RP`, `MC_T_RCD` | PRE and ACT timing. |
+| `MC_CL` | CAS-to-read-data phase length (PHY should align). |
+| `MC_RD_DV_MAX` | Max cycles to wait for `dfi_rddata_valid` after `MC_CL`. |
 
 # 8. Verification
 
 Simulation uses **Icarus Verilog** (`iverilog -g2001`). The testbench **`src/tb_axi4_to_dfi_bridge.v`** provides:
 
 - Independent **`axi_aclk`** and **`dfi_clk`** generators.
-- A minimal PHY read-return model and basic write/read scoreboard checks.
+- A minimal PHY read-return model (**`TB_PHY_MC_CL`** should match DUT **`MC_CL`**) and scoreboard checks.
 - Optional **`+vcd`** for **gtkwave**.
 
 Build and run: **`make -C test run`** (see repository **README.md**).
@@ -140,6 +160,7 @@ Build and run: **`make -C test run`** (see repository **README.md**).
 | Revision | Summary |
 |----------|---------|
 | 0.1 | Initial design specification from RTL structure. |
+| 0.2 | Document SDRAM open-page scheduler and MC_* parameters. |
 
 # Document control
 

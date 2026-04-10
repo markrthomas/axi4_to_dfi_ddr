@@ -32,6 +32,7 @@ module tb;
     localparam [2:0] AXI_SIZE_FULL = 3'd3; // 2**3 = 8 bytes for 64-bit bus
 
     integer errors;
+    integer tb_qi;
 
     // Asynchronous clocks (CDC path in DUT)
     reg axi_aclk;
@@ -196,6 +197,95 @@ module tb;
         .dfi_rddata_en      (dfi_rddata_en)
     );
 
+    //-------------------------------------------------------------------------
+    // DFI SDRAM-style command counters (dfi_clk): PRE / ACT / READ CAS / WRITE CAS
+    //-------------------------------------------------------------------------
+    reg                          mon_en;
+    reg                          tb_mon_reset;
+    reg [15:0]                   mon_pre;
+    reg [15:0]                   mon_act;
+    reg [15:0]                   mon_rdcas;
+    reg [15:0]                   mon_wrcas;
+
+    initial tb_mon_reset = 1'b0;
+
+    always @(posedge dfi_clk or negedge dfi_rst_n) begin
+        if (!dfi_rst_n) begin
+            mon_pre    <= 16'd0;
+            mon_act    <= 16'd0;
+            mon_rdcas  <= 16'd0;
+            mon_wrcas  <= 16'd0;
+        end else if (tb_mon_reset) begin
+            mon_pre    <= 16'd0;
+            mon_act    <= 16'd0;
+            mon_rdcas  <= 16'd0;
+            mon_wrcas  <= 16'd0;
+        end else if (dfi_init_complete && mon_en && !dfi_cs_n[0]) begin
+            if (!dfi_ras_n && dfi_cas_n && !dfi_we_n)
+                mon_pre <= mon_pre + 16'd1;
+            else if (!dfi_ras_n && dfi_cas_n && dfi_we_n)
+                mon_act <= mon_act + 16'd1;
+            else if (dfi_ras_n && !dfi_cas_n && dfi_we_n)
+                mon_rdcas <= mon_rdcas + 16'd1;
+            else if (dfi_ras_n && !dfi_cas_n && !dfi_we_n)
+                mon_wrcas <= mon_wrcas + 16'd1;
+        end
+    end
+
+    // Pack AXI address like DUT MC decode: bank[26:24], row[23:10], col[9:0]
+    function [C_AXI_ADDR_WIDTH-1:0] tb_mc_addr;
+        input [DFI_BANK_WIDTH-1:0] bank;
+        input [13:0]               row; // MC_ROW_BITS=14
+        input [9:0]                col; // MC_COL_BITS=10
+        begin
+            tb_mc_addr = { {5{1'b0}}, bank, row, col };
+        end
+    endfunction
+
+    task tb_mon_clear;
+        begin
+            @(posedge dfi_clk);
+            tb_mon_reset = 1'b1;
+            @(posedge dfi_clk);
+            tb_mon_reset = 1'b0;
+        end
+    endtask
+
+    // Allow MC FSM + CDC to finish after last AXI handshake
+    task tb_wait_dfi_mc;
+        input integer dfi_cycles;
+        integer k;
+        begin
+            for (k = 0; k < dfi_cycles; k = k + 1)
+                @(posedge dfi_clk);
+        end
+    endtask
+
+    task tb_check_mc_counts;
+        input integer exp_pre;
+        input integer exp_act;
+        input integer exp_rdcas;
+        input integer exp_wrcas;
+        begin
+            if (mon_pre != exp_pre) begin
+                $display("FAIL: MC PRE count exp %0d got %0d", exp_pre, mon_pre);
+                errors = errors + 1;
+            end
+            if (mon_act != exp_act) begin
+                $display("FAIL: MC ACT count exp %0d got %0d", exp_act, mon_act);
+                errors = errors + 1;
+            end
+            if (mon_rdcas != exp_rdcas) begin
+                $display("FAIL: MC READ CAS count exp %0d got %0d", exp_rdcas, mon_rdcas);
+                errors = errors + 1;
+            end
+            if (mon_wrcas != exp_wrcas) begin
+                $display("FAIL: MC WRITE CAS count exp %0d got %0d", exp_wrcas, mon_wrcas);
+                errors = errors + 1;
+            end
+        end
+    endtask
+
     // Tie unused DFI handshakes (no update traffic)
     initial begin
         dfi_ctrlupd_ack = 1'b0;
@@ -209,37 +299,59 @@ module tb;
     reg [C_AXI_ADDR_WIDTH-1:0] tb_read_addr_q [0:15];
     integer tb_read_addr_wr_ptr;
     integer tb_read_addr_rd_ptr;
+    // Pulse high (dfi_clk domain) to clear PHY read pipeline and rd_ptr
+    reg                          tb_read_model_rst;
 
-    always @(posedge axi_aclk or negedge axi_aresetn) begin
-        if (!axi_aresetn) begin
-            tb_read_addr_wr_ptr <= 0;
-            tb_read_addr_rd_ptr <= 0;
-        end else if (s_axi_arvalid && s_axi_arready &&
-                     (s_axi_arburst == 2'b01) && (s_axi_arlen == 8'd0) &&
-                     (s_axi_arsize == AXI_SIZE_FULL)) begin
-            tb_read_addr_q[tb_read_addr_wr_ptr[3:0]] <= s_axi_araddr;
-            tb_read_addr_wr_ptr <= tb_read_addr_wr_ptr + 1;
+    initial tb_read_model_rst = 1'b0;
+
+    // wr_ptr / queue entries updated only from tasks (avoid race with arvalid drop same cycle)
+    task tb_push_read_addr;
+        input [C_AXI_ADDR_WIDTH-1:0] addr;
+        begin
+            tb_read_addr_q[tb_read_addr_wr_ptr[3:0]] = addr;
+            tb_read_addr_wr_ptr = tb_read_addr_wr_ptr + 1;
         end
-    end
+    endtask
+
+    task tb_clear_read_addr_q;
+        begin
+            tb_read_addr_wr_ptr = 0;
+            for (tb_qi = 0; tb_qi < 16; tb_qi = tb_qi + 1)
+                tb_read_addr_q[tb_qi] = {C_AXI_ADDR_WIDTH{1'b0}};
+        end
+    endtask
 
     //-------------------------------------------------------------------------
-    // Minimal PHY read-return model (dfi_clk domain)
+    // PHY read-return model (dfi_clk domain): align with DUT MC_CL after READ CAS
     //-------------------------------------------------------------------------
-    reg [2:0] phy_rd_pipe;
+    localparam integer TB_PHY_MC_CL = 6;
+
+    reg [7:0] phy_rd_lat;
 
     always @(posedge dfi_clk or negedge dfi_rst_n) begin
         if (!dfi_rst_n) begin
-            phy_rd_pipe      <= 3'b0;
-            dfi_rddata_valid <= 1'b0;
-            dfi_rddata       <= {DFI_DATA_WIDTH{1'b0}};
+            phy_rd_lat            <= 8'd0;
+            dfi_rddata_valid      <= 1'b0;
+            dfi_rddata            <= {DFI_DATA_WIDTH{1'b0}};
+            tb_read_addr_rd_ptr   <= 0;
+        end else if (tb_read_model_rst) begin
+            phy_rd_lat            <= 8'd0;
+            dfi_rddata_valid      <= 1'b0;
+            dfi_rddata            <= {DFI_DATA_WIDTH{1'b0}};
+            tb_read_addr_rd_ptr   <= 0;
         end else begin
             dfi_rddata_valid <= 1'b0;
-            phy_rd_pipe <= {phy_rd_pipe[1:0], dfi_rddata_en};
-            if (phy_rd_pipe[2]) begin
-                dfi_rddata_valid <= 1'b1;
-                dfi_rddata <= {32'hA5A5A5A5, 14'h0,
-                               tb_read_addr_q[tb_read_addr_rd_ptr[3:0]][DFI_ADDR_WIDTH-1:0]};
-                tb_read_addr_rd_ptr <= tb_read_addr_rd_ptr + 1;
+            if (dfi_rddata_en)
+                phy_rd_lat <= TB_PHY_MC_CL[7:0];
+            else if (phy_rd_lat != 8'd0) begin
+                if (phy_rd_lat == 8'd1) begin
+                    dfi_rddata_valid <= 1'b1;
+                    dfi_rddata <= {32'hA5A5A5A5, 14'h0,
+                                   tb_read_addr_q[tb_read_addr_rd_ptr[3:0]][DFI_ADDR_WIDTH-1:0]};
+                    tb_read_addr_rd_ptr <= tb_read_addr_rd_ptr + 1;
+                    phy_rd_lat <= 8'd0;
+                end else
+                    phy_rd_lat <= phy_rd_lat - 8'd1;
             end
         end
     end
@@ -433,6 +545,7 @@ module tb;
             @(posedge axi_aclk);
             while (!s_axi_arready)
                 @(posedge axi_aclk);
+            tb_push_read_addr(s_axi_araddr);
             s_axi_arvalid = 1'b0;
         end
     endtask
@@ -518,6 +631,8 @@ module tb;
 
     initial begin
         errors = 0;
+        mon_en = 1'b0;
+        tb_read_addr_wr_ptr = 0;
         axi_aresetn = 1'b0;
         dfi_rst_n   = 1'b0;
         dfi_init_complete = 1'b0;
@@ -661,10 +776,55 @@ module tb;
         axi_read_single(32'h0000_5000, 4'h8);
         axi_wait_r_stall(4'h8, expected_rdata(32'h0000_5000), 4);
 
+        // --- Test 8: memory-controller open-page / row-miss / cold-bank (DFI command counts) ---
+        // Realign PHY read queue (test 2 AR is illegal size; no push from axi_read_single)
+        s_axi_arvalid = 1'b0;
+        tb_clear_read_addr_q;
+        tb_read_model_rst = 1'b1;
+        repeat (12) @(posedge dfi_clk);
+        tb_read_model_rst = 1'b0;
+        repeat (6) @(posedge axi_aclk);
+
+        // 8a: open-page read hit: only READ CAS after row already open (different column).
+        // Use bank 5 so earlier tests on bank 0 do not force PRE/ACT.
+        mon_en = 1'b0;
+        axi_write_single(tb_mc_addr(3'd5, 14'd24, 10'd0), 4'hE, 64'hCAFEBABE_00000001, 8'hFF);
+        axi_wait_b(4'hE);
+        tb_wait_dfi_mc(64);
+        tb_mon_clear;
+        mon_en = 1'b1;
+        axi_read_single(tb_mc_addr(3'd5, 14'd24, 10'd4), 4'hF);
+        axi_wait_r(4'hF, expected_rdata(tb_mc_addr(3'd5, 14'd24, 10'd4)));
+        tb_wait_dfi_mc(48);
+        mon_en = 1'b0;
+        tb_check_mc_counts(0, 0, 1, 0);
+
+        // 8b: row miss on same bank — PRE + ACT + WRITE CAS for second row (bank 4)
+        mon_en = 1'b0;
+        axi_write_single(tb_mc_addr(3'd4, 14'd5, 10'd0), 4'h9, 64'hDEAD6000_00006000, 8'hFF);
+        axi_wait_b(4'h9);
+        tb_wait_dfi_mc(64);
+        tb_mon_clear;
+        mon_en = 1'b1;
+        axi_write_single(tb_mc_addr(3'd4, 14'd6, 10'd0), 4'h2, 64'hDEAD6800_00006800, 8'hFF);
+        axi_wait_b(4'h2);
+        tb_wait_dfi_mc(64);
+        mon_en = 1'b0;
+        tb_check_mc_counts(1, 1, 0, 1);
+
+        // 8c: cold bank (no prior traffic in bank 7) — ACT + WRITE CAS, no PRE
+        tb_mon_clear;
+        mon_en = 1'b1;
+        axi_write_single(32'h0700_0000, 4'hB, 64'hA5B7C0DE_07000000, 8'hFF);
+        axi_wait_b(4'hB);
+        tb_wait_dfi_mc(64);
+        mon_en = 1'b0;
+        tb_check_mc_counts(0, 1, 0, 1);
+
         repeat (20) @(posedge axi_aclk);
 
         if (errors == 0)
-            $display("PASS: tb_axi4_to_dfi_bridge (init gating + unsupported request errors + backpressure checks)");
+            $display("PASS: tb_axi4_to_dfi_bridge (init gating + SLVERR + backpressure + MC PRE/ACT/CAS checks)");
         else
             $display("FAIL: tb_axi4_to_dfi_bridge errors=%0d", errors);
         $finish;

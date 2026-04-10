@@ -11,12 +11,11 @@
 //   - axi_aclk / axi_aresetn : AXI4 protocol and user-facing timing
 //   - dfi_clk  / dfi_rst_n   : DFI-side timing (often 1:1 or ratioed to DRAM)
 //
-// Functional note: This module provides correct AXI4 handshaking, CDC, and
-// legal idle DFI command encoding while returning SLVERR for unsupported AXI
-// request shapes.
-// DRAM command sequencing (ACT/PRE/REF), timing, and per-PHY phasing
-// (DFI P0..P3) are system-specific; extend the dfi_* drive logic for a full
-// controller.
+// Functional note: AXI4 handshaking, CDC, SLVERR for unsupported requests.
+// The dfi_clk domain includes an SDRAM-style open-page scheduler: per-bank
+// row tracking, PRE (wrong row or closed), ACT, then READ/WRITE CAS with
+// parameterized tRP, tRCD, and MC_CL. Refresh and multi-phase DFI are not
+// implemented (see parameters MC_*).
 //=============================================================================
 
 `timescale 1ns / 1ps
@@ -156,10 +155,17 @@ module axi4_to_dfi_bridge #(
 
     parameter integer CDC_FIFO_DEPTH = 8,
 
-    // Model PHY write latency (dfi_clk cycles) before BVALID in AXI domain
+    // PHY / response timing (dfi_clk cycles)
     parameter integer DFI_WRITE_ACK_CYCLES = 4,
-    // Model PHY read latency before RVALID
-    parameter integer DFI_READ_DATA_CYCLES = 6
+    parameter integer DFI_READ_DATA_CYCLES = 6,
+
+    // SDRAM-style scheduler: address map = { bank, row, col } in AXI byte address LSBs
+    parameter integer MC_COL_BITS  = 10,
+    parameter integer MC_ROW_BITS  = 14,
+    parameter integer MC_T_RP      = 4,  // PRE to ACT
+    parameter integer MC_T_RCD     = 4,  // ACT to READ/WRITE command
+    parameter integer MC_CL        = 6,  // CAS to first read data (PHY should align)
+    parameter integer MC_RD_DV_MAX = 16   // cycles to wait for dfi_rddata_valid after CL
 ) (
     // --- AXI4 clock / reset (AMBA AXI4) ---
     input  wire                          axi_aclk,
@@ -385,26 +391,45 @@ module axi4_to_dfi_bridge #(
     );
 
     //-------------------------------------------------------------------------
-    // DFI clock domain: single driver for dfi_*; writes preferred over reads
+    // DFI clock domain: SDRAM-style scheduler (PRE/ACT/CAS, open-page per bank)
     //-------------------------------------------------------------------------
-    localparam integer TIMER_W = 8;
+    localparam integer NBANKS = (1 << DFI_BANK_WIDTH);
+
+    localparam [3:0] ST_IDLE      = 4'd0;
+    localparam [3:0] ST_PRE_CMD  = 4'd1;
+    localparam [3:0] ST_WAIT_RP  = 4'd2;
+    localparam [3:0] ST_ACT_CMD  = 4'd3;
+    localparam [3:0] ST_WAIT_RCD = 4'd4;
+    localparam [3:0] ST_WR_CMD   = 4'd5;
+    localparam [3:0] ST_WAIT_B   = 4'd6;
+    localparam [3:0] ST_RD_CMD   = 4'd7;
+    localparam [3:0] ST_WAIT_CL  = 4'd8;
+    localparam [3:0] ST_WAIT_DV  = 4'd9;
+    localparam [3:0] ST_PULSE_R  = 4'd10;
 
     reg wreq_rd_en_r;
     reg rreq_rd_en_r;
-    // Latch FIFO output on pop cycle; rd_data advances after rd_en so _r cycle must
-    // use this snapshot (FWFT output follows rptr and shows 0 when empty after pop).
     reg [WREQ_W-1:0] wreq_snapshot;
     reg [RREQ_W-1:0] rreq_snapshot;
 
-    reg w_busy;
-    reg [TIMER_W-1:0] w_timer;
-    reg [C_AXI_ID_WIDTH-1:0] w_pending_id;
+    reg  [3:0]               mc_state;
+    reg  [7:0]               mc_ctr;
+    reg  [3:0]               mc_after_rp;
+    reg  [3:0]               mc_after_rcd;
+    reg                      mc_is_wr;
+    reg  [C_AXI_ID_WIDTH-1:0] mc_id;
+    reg  [C_AXI_ADDR_WIDTH-1:0] mc_addr;
+    reg  [C_AXI_DATA_WIDTH-1:0] mc_wdata;
+    reg  [STROBE_W-1:0]      mc_wstrb;
+    reg  [DFI_BANK_WIDTH-1:0] mc_bank;
+    reg  [MC_ROW_BITS-1:0]   mc_row;
+    reg  [MC_COL_BITS-1:0]   mc_col;
+    reg  [NBANKS-1:0]        row_open_mask;
+    reg  [MC_ROW_BITS-1:0]   open_row_mem [0:NBANKS-1];
+    reg  [C_AXI_DATA_WIDTH-1:0] r_capture;
 
-    reg r_busy;
-    reg [TIMER_W-1:0] r_timer;
-    reg [C_AXI_ID_WIDTH-1:0] r_pending_id;
-    reg [C_AXI_DATA_WIDTH-1:0] r_capture;
-
+    wire [C_AXI_ADDR_WIDTH-1:0] wreq_addr =
+        wreq_snapshot[STROBE_W+C_AXI_DATA_WIDTH +: C_AXI_ADDR_WIDTH];
     wire [C_AXI_ID_WIDTH-1:0] wreq_id =
         wreq_snapshot[STROBE_W+C_AXI_DATA_WIDTH+C_AXI_ADDR_WIDTH +: C_AXI_ID_WIDTH];
     wire [C_AXI_ID_WIDTH-1:0] rreq_id = rreq_snapshot[C_AXI_ADDR_WIDTH +: C_AXI_ID_WIDTH];
@@ -419,19 +444,21 @@ module axi4_to_dfi_bridge #(
         .q        (dfi_init_complete_sync)
     );
 
-    assign wreq_rd_en = dfi_mc_ready && !w_busy && !r_busy && !wreq_rd_en_r &&
-                        !wreq_empty && !bresp_full;
-    assign rreq_rd_en = dfi_mc_ready && !w_busy && !r_busy && !rreq_rd_en_r &&
-                        wreq_empty && !rreq_empty && !rresp_full;
+    wire mc_idle = (mc_state == ST_IDLE);
+
+    assign wreq_rd_en = dfi_mc_ready && mc_idle && !wreq_rd_en_r &&
+                        !rreq_rd_en_r && !wreq_empty && !bresp_full;
+    assign rreq_rd_en = dfi_mc_ready && mc_idle && !wreq_rd_en_r &&
+                        !rreq_rd_en_r && wreq_empty && !rreq_empty && !rresp_full;
 
     wire bresp_full;
     wire rresp_full;
 
-    wire bresp_wr_en = w_busy && (w_timer == 1) && !bresp_full;
-    wire [BRESP_FIFO_W-1:0] bresp_wr_data = w_pending_id;
+    wire bresp_wr_en = (mc_state == ST_WAIT_B) && (mc_ctr == 8'd1) && !bresp_full;
+    wire [BRESP_FIFO_W-1:0] bresp_wr_data = mc_id;
 
-    wire rresp_wr_en = r_busy && (r_timer == 1) && !rresp_full;
-    wire [RRESP_FIFO_W-1:0] rresp_wr_data = {r_pending_id, r_capture};
+    wire rresp_wr_en = (mc_state == ST_PULSE_R) && !rresp_full;
+    wire [RRESP_FIFO_W-1:0] rresp_wr_data = {mc_id, r_capture};
 
     wire bresp_rd_en;
     wire bresp_empty;
@@ -581,13 +608,28 @@ module axi4_to_dfi_bridge #(
             rreq_rd_en_r     <= 1'b0;
             wreq_snapshot    <= {WREQ_W{1'b0}};
             rreq_snapshot    <= {RREQ_W{1'b0}};
-            w_busy           <= 1'b0;
-            w_timer          <= {TIMER_W{1'b0}};
-            w_pending_id     <= {C_AXI_ID_WIDTH{1'b0}};
-            r_busy           <= 1'b0;
-            r_timer          <= {TIMER_W{1'b0}};
-            r_pending_id     <= {C_AXI_ID_WIDTH{1'b0}};
+            mc_state         <= ST_IDLE;
+            mc_ctr           <= 8'd0;
+            mc_after_rp      <= ST_IDLE;
+            mc_after_rcd     <= ST_IDLE;
+            mc_is_wr         <= 1'b0;
+            mc_id            <= {C_AXI_ID_WIDTH{1'b0}};
+            mc_addr          <= {C_AXI_ADDR_WIDTH{1'b0}};
+            mc_wdata         <= {C_AXI_DATA_WIDTH{1'b0}};
+            mc_wstrb         <= {STROBE_W{1'b0}};
+            mc_bank          <= {DFI_BANK_WIDTH{1'b0}};
+            mc_row           <= {MC_ROW_BITS{1'b0}};
+            mc_col           <= {MC_COL_BITS{1'b0}};
+            row_open_mask    <= {NBANKS{1'b0}};
             r_capture        <= {C_AXI_DATA_WIDTH{1'b0}};
+            open_row_mem[0]  <= {MC_ROW_BITS{1'b0}};
+            open_row_mem[1]  <= {MC_ROW_BITS{1'b0}};
+            open_row_mem[2]  <= {MC_ROW_BITS{1'b0}};
+            open_row_mem[3]  <= {MC_ROW_BITS{1'b0}};
+            open_row_mem[4]  <= {MC_ROW_BITS{1'b0}};
+            open_row_mem[5]  <= {MC_ROW_BITS{1'b0}};
+            open_row_mem[6]  <= {MC_ROW_BITS{1'b0}};
+            open_row_mem[7]  <= {MC_ROW_BITS{1'b0}};
         end else begin
             if (wreq_rd_en)
                 wreq_snapshot <= wreq_rdata;
@@ -603,44 +645,134 @@ module axi4_to_dfi_bridge #(
             dfi_wrdata_en <= 1'b0;
             dfi_rddata_en <= 1'b0;
 
-            if (w_busy) begin
-                if ((w_timer == 1) && !bresp_full)
-                    w_busy <= 1'b0;
-                else if (w_timer != 1)
-                    w_timer <= w_timer - 1'b1;
-            end else if (r_busy) begin
-                if (dfi_rddata_valid)
-                    r_capture <= dfi_rddata[C_AXI_DATA_WIDTH-1:0];
-                if ((r_timer == 1) && !rresp_full)
-                    r_busy <= 1'b0;
-                else if (r_timer != 1)
-                    r_timer <= r_timer - 1'b1;
-            end else if (wreq_rd_en_r) begin
-                dfi_address <= wreq_snapshot[C_AXI_ADDR_WIDTH-1:0];
-                if (DFI_BANK_WIDTH > 0)
-                    dfi_bank <= wreq_snapshot[2 +: DFI_BANK_WIDTH];
-                dfi_wrdata <= wreq_snapshot[C_AXI_DATA_WIDTH+STROBE_W-1:STROBE_W];
-                dfi_wrdata_mask <= ~wreq_snapshot[STROBE_W-1:0];
-                dfi_cas_n     <= 1'b0;
-                dfi_we_n      <= 1'b0;
-                dfi_cs_n      <= {DFI_CS_WIDTH{1'b0}};
-                dfi_wrdata_en <= 1'b1;
-                w_pending_id  <= wreq_id;
-                w_busy        <= 1'b1;
-                w_timer       <= DFI_WRITE_ACK_CYCLES[TIMER_W-1:0];
-            end else if (rreq_rd_en_r) begin
-                dfi_address <= rreq_snapshot[C_AXI_ADDR_WIDTH-1:0];
-                if (DFI_BANK_WIDTH > 0)
-                    dfi_bank <= rreq_snapshot[2 +: DFI_BANK_WIDTH];
-                dfi_cas_n     <= 1'b0;
-                dfi_we_n      <= 1'b1;
-                dfi_cs_n      <= {DFI_CS_WIDTH{1'b0}};
-                dfi_rddata_en <= 1'b1;
-                r_pending_id  <= rreq_id;
-                r_capture       <= {C_AXI_DATA_WIDTH{1'b0}};
-                r_busy          <= 1'b1;
-                r_timer         <= DFI_READ_DATA_CYCLES[TIMER_W-1:0];
-            end
+            case (mc_state)
+                ST_IDLE: begin
+                    if (wreq_rd_en_r) begin
+                        mc_is_wr <= 1'b1;
+                        mc_id    <= wreq_id;
+                        mc_addr  <= wreq_addr;
+                        mc_wdata <= wreq_snapshot[C_AXI_DATA_WIDTH+STROBE_W-1:STROBE_W];
+                        mc_wstrb <= wreq_snapshot[STROBE_W-1:0];
+                        mc_bank  <= wreq_addr[MC_COL_BITS+MC_ROW_BITS +: DFI_BANK_WIDTH];
+                        mc_row   <= wreq_addr[MC_COL_BITS +: MC_ROW_BITS];
+                        mc_col   <= wreq_addr[MC_COL_BITS-1:0];
+                        if (!row_open_mask[wreq_addr[MC_COL_BITS+MC_ROW_BITS +: DFI_BANK_WIDTH]]) begin
+                            mc_after_rcd <= ST_WR_CMD;
+                            mc_state     <= ST_ACT_CMD;
+                        end else if (open_row_mem[wreq_addr[MC_COL_BITS+MC_ROW_BITS +: DFI_BANK_WIDTH]] !=
+                                     wreq_addr[MC_COL_BITS +: MC_ROW_BITS]) begin
+                            mc_after_rp  <= ST_ACT_CMD;
+                            mc_after_rcd <= ST_WR_CMD;
+                            mc_state     <= ST_PRE_CMD;
+                        end else
+                            mc_state <= ST_WR_CMD;
+                    end else if (rreq_rd_en_r) begin
+                        mc_is_wr <= 1'b0;
+                        mc_id    <= rreq_id;
+                        mc_addr  <= rreq_snapshot[C_AXI_ADDR_WIDTH-1:0];
+                        mc_bank  <= rreq_snapshot[MC_COL_BITS+MC_ROW_BITS +: DFI_BANK_WIDTH];
+                        mc_row   <= rreq_snapshot[MC_COL_BITS +: MC_ROW_BITS];
+                        mc_col   <= rreq_snapshot[MC_COL_BITS-1:0];
+                        if (!row_open_mask[rreq_snapshot[MC_COL_BITS+MC_ROW_BITS +: DFI_BANK_WIDTH]]) begin
+                            mc_after_rcd <= ST_RD_CMD;
+                            mc_state     <= ST_ACT_CMD;
+                        end else if (open_row_mem[rreq_snapshot[MC_COL_BITS+MC_ROW_BITS +: DFI_BANK_WIDTH]] !=
+                                     rreq_snapshot[MC_COL_BITS +: MC_ROW_BITS]) begin
+                            mc_after_rp  <= ST_ACT_CMD;
+                            mc_after_rcd <= ST_RD_CMD;
+                            mc_state     <= ST_PRE_CMD;
+                        end else
+                            mc_state <= ST_RD_CMD;
+                    end
+                end
+                ST_PRE_CMD: begin
+                    dfi_bank    <= mc_bank;
+                    dfi_address <= open_row_mem[mc_bank];
+                    dfi_ras_n   <= 1'b0;
+                    dfi_cas_n   <= 1'b1;
+                    dfi_we_n    <= 1'b0;
+                    dfi_cs_n    <= {DFI_CS_WIDTH{1'b0}};
+                    row_open_mask[mc_bank] <= 1'b0;
+                    mc_ctr      <= MC_T_RP[7:0];
+                    mc_state    <= ST_WAIT_RP;
+                end
+                ST_WAIT_RP: begin
+                    if (mc_ctr == 8'd1)
+                        mc_state <= mc_after_rp;
+                    else
+                        mc_ctr <= mc_ctr - 8'd1;
+                end
+                ST_ACT_CMD: begin
+                    dfi_bank    <= mc_bank;
+                    dfi_address <= mc_row;
+                    dfi_ras_n   <= 1'b0;
+                    dfi_cas_n   <= 1'b1;
+                    dfi_we_n    <= 1'b1;
+                    dfi_cs_n    <= {DFI_CS_WIDTH{1'b0}};
+                    mc_ctr      <= MC_T_RCD[7:0];
+                    mc_state    <= ST_WAIT_RCD;
+                end
+                ST_WAIT_RCD: begin
+                    if (mc_ctr == 8'd1) begin
+                        row_open_mask[mc_bank] <= 1'b1;
+                        open_row_mem[mc_bank]    <= mc_row;
+                        mc_state                 <= mc_after_rcd;
+                    end else
+                        mc_ctr <= mc_ctr - 8'd1;
+                end
+                ST_WR_CMD: begin
+                    dfi_bank          <= mc_bank;
+                    dfi_address       <= mc_col;
+                    dfi_ras_n         <= 1'b1;
+                    dfi_cas_n         <= 1'b0;
+                    dfi_we_n          <= 1'b0;
+                    dfi_cs_n          <= {DFI_CS_WIDTH{1'b0}};
+                    dfi_wrdata        <= mc_wdata;
+                    dfi_wrdata_mask   <= ~mc_wstrb;
+                    dfi_wrdata_en     <= 1'b1;
+                    mc_ctr            <= DFI_WRITE_ACK_CYCLES[7:0];
+                    mc_state          <= ST_WAIT_B;
+                end
+                ST_WAIT_B: begin
+                    if (mc_ctr == 8'd1) begin
+                        if (!bresp_full)
+                            mc_state <= ST_IDLE;
+                    end else
+                        mc_ctr <= mc_ctr - 8'd1;
+                end
+                ST_RD_CMD: begin
+                    dfi_bank      <= mc_bank;
+                    dfi_address   <= mc_col;
+                    dfi_ras_n     <= 1'b1;
+                    dfi_cas_n     <= 1'b0;
+                    dfi_we_n      <= 1'b1;
+                    dfi_cs_n      <= {DFI_CS_WIDTH{1'b0}};
+                    dfi_rddata_en <= 1'b1;
+                    r_capture     <= {C_AXI_DATA_WIDTH{1'b0}};
+                    mc_ctr        <= MC_CL[7:0];
+                    mc_state      <= ST_WAIT_CL;
+                end
+                ST_WAIT_CL: begin
+                    if (mc_ctr == 8'd1) begin
+                        mc_ctr   <= MC_RD_DV_MAX[7:0];
+                        mc_state <= ST_WAIT_DV;
+                    end else
+                        mc_ctr <= mc_ctr - 8'd1;
+                end
+                ST_WAIT_DV: begin
+                    if (dfi_rddata_valid)
+                        r_capture <= dfi_rddata[C_AXI_DATA_WIDTH-1:0];
+                    if (dfi_rddata_valid || (mc_ctr == 8'd0))
+                        mc_state <= ST_PULSE_R;
+                    else
+                        mc_ctr <= mc_ctr - 8'd1;
+                end
+                ST_PULSE_R: begin
+                    if (!rresp_full)
+                        mc_state <= ST_IDLE;
+                end
+                default: mc_state <= ST_IDLE;
+            endcase
         end
     end
 
