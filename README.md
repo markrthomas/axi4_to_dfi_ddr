@@ -10,37 +10,93 @@ This repository is a practical starting point for simulation and integration; fu
 |------|-------------|
 | `src/axi4_to_dfi_bridge.v` | Top bridge, `cdc_sync`, `async_fifo_gray`, and AXI4 slave → DFI command/data |
 | `src/tb_axi4_to_dfi_bridge.v` | Self-contained testbench, stimulus, and a minimal DFI read model |
-| `test/Makefile` | Build and run simulation; optional VCD for **gtkwave** |
+| `Makefile` | Repo root shortcuts: `run`, `clean`, `doc`, `doc-html`, etc. |
+| `test/Makefile` | Simulation: **iverilog**/**vvp**, VCD/**gtkwave**; also `doc` / `doc-html` wrappers |
+| `doc/DESIGN_SPEC.md` | Design specification (source for PDF/HTML) |
+| `doc/Makefile` | `pdf`, `html`, `clean` (outputs under `doc/build/`) |
 | `LICENSE` | MIT |
 
 ## Requirements
 
-- [Icarus Verilog](http://iverilog.icarus.com/) (`iverilog`, `vvp`), typically with **Verilog-2001** (`-g2001`)
-- Optional: **gtkwave** for viewing waveforms
+### Simulation
 
-## Build and test
+- [Icarus Verilog](http://iverilog.icarus.com/): `iverilog` and `vvp`, usually with **Verilog-2001** (`-g2001`).
+- Optional: **gtkwave** to view VCD waveforms.
 
-From the repository root:
+### Documentation
 
-```bash
-make -C test help     # list Makefile targets
-make -C test build    # compile only → test/build/sim.vvp
-make -C test run     # build (if needed) and run tests (default: `make -C test`)
-make -C test vcd      # run with +vcd → test/build/sim.vcd
-make -C test wave     # vcd then launch gtkwave (if in PATH)
-make -C test clean    # remove test/build/
-```
+- **HTML** (`doc/build/design_spec.html`): [pandoc](https://pandoc.org/) only.
+- **PDF** (`doc/build/design_spec.pdf`): pandoc plus a LaTeX engine (**pdflatex**). On Debian/Ubuntu-style systems, installing `pandoc` and `texlive-latex-base` (or a fuller TeX Live metapackage) is usually enough.
 
-Manual compile (equivalent to the Makefile sources):
+## Build and test (simulation)
+
+From the **repository root**, you can use the root `Makefile` or call `test/` directly:
 
 ```bash
-iverilog -g2001 -Wall -o sim.vvp src/axi4_to_dfi_bridge.v src/tb_axi4_to_dfi_bridge.v
-vvp sim.vvp
-# optional waveform dump for gtkwave:
-vvp sim.vvp +vcd
+make help             # list root targets
+make run              # same as: make -C test run
+make build            # compile only → test/build/sim.vvp
+make vcd              # run with +vcd → test/build/sim.vcd
+make wave             # vcd, then launch gtkwave (if in PATH)
 ```
 
-When using `+vcd`, run `vvp` from the `test/` directory so the dump path `build/sim.vcd` matches the Makefile layout, or adjust `$dumpfile` in the testbench for your working directory.
+Equivalent using `make -C test`:
+
+```bash
+make -C test help
+make -C test build
+make -C test run      # default if you run: make -C test
+make -C test vcd
+make -C test wave
+```
+
+Generated simulation artifacts live under **`test/build/`** (ignored by git).
+
+## Documentation (design spec)
+
+Source: **`doc/DESIGN_SPEC.md`**. Outputs go to **`doc/build/`** (ignored by git).
+
+```bash
+# From repo root
+make doc              # PDF via pandoc + pdflatex
+make doc-html         # standalone HTML via pandoc only
+
+# Or from doc/
+make -C doc pdf
+make -C doc html
+make -C doc help
+
+# Wrappers from test/
+make -C test doc
+make -C test doc-html
+```
+
+Open the PDF with any PDF viewer. Open the HTML in a browser. For PDF builds, if you see LaTeX errors about missing packages, install the suggested TeX Live packages for your OS.
+
+## Clean
+
+Remove **all** generated simulation and documentation outputs (both `test/build/` and `doc/build/`):
+
+```bash
+make clean            # from repository root (recommended)
+```
+
+To clean only one area:
+
+```bash
+make -C test clean    # simulation build only
+make -C doc clean     # documentation build only
+```
+
+Manual compile (same sources as `test/Makefile`):
+
+```bash
+cd test
+mkdir -p build
+iverilog -g2001 -Wall -o build/sim.vvp ../src/axi4_to_dfi_bridge.v ../src/tb_axi4_to_dfi_bridge.v
+vvp build/sim.vvp
+vvp build/sim.vvp +vcd   # optional: writes build/sim.vcd (paths match the testbench)
+```
 
 ## Interfaces (references)
 

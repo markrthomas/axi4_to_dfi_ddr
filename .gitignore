@@ -3,5 +3,8 @@ test/build/
 sim.vvp
 *.vvp
 
+# Documentation build outputs (pandoc)
+doc/build/
+
 # Local Codex workspace artifacts
 .codex

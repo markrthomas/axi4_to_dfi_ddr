@@ -11,8 +11,11 @@
 #   wave    Run vcd then launch gtkwave on build/sim.vcd (if gtkwave in PATH)
 #   clean   Remove build/
 #   help    Show this summary
+#   doc     Build doc/build/design_spec.pdf (pandoc + pdflatex)
+#   doc-html  Build doc/build/design_spec.html (pandoc only)
 
 SRC_DIR   := ../src
+DOC_DIR   := ../doc
 BUILD_DIR := build
 SIM       := $(BUILD_DIR)/sim.vvp
 VCD       := $(BUILD_DIR)/sim.vcd
@@ -22,16 +25,19 @@ IVERILOG  := iverilog
 VVP       := vvp
 IVERFLAGS := -g2001 -Wall
 
-.PHONY: all build run test vcd wave clean help
+.PHONY: all build run test vcd wave clean help doc doc-html
 
 all: run
 
 help:
-	@echo "Targets: build  run  test  vcd  wave  clean  help"
+	@echo "Targets: build  run  test  vcd  wave  doc  doc-html  clean  help"
 	@echo "  build  - compile to $(SIM)"
 	@echo "  run    - compile (if needed) and run tests"
 	@echo "  vcd    - run tests and write $(VCD) (open with gtkwave)"
 	@echo "  wave   - vcd + gtkwave $(VCD)"
+	@echo "  doc    - PDF from $(DOC_DIR)/DESIGN_SPEC.md (requires pandoc + pdflatex)"
+	@echo "  doc-html - HTML from design spec (pandoc only)"
+	@echo "  clean  - remove $(BUILD_DIR)/ only (use repo root 'make clean' for doc too)"
 
 build: $(SIM)
 
@@ -55,6 +61,12 @@ wave: vcd
 		echo "gtkwave not found in PATH; open $(VCD) manually"; \
 		exit 1; \
 	fi
+
+doc:
+	$(MAKE) -C $(DOC_DIR) pdf
+
+doc-html:
+	$(MAKE) -C $(DOC_DIR) html
 
 clean:
 	rm -rf $(BUILD_DIR)
