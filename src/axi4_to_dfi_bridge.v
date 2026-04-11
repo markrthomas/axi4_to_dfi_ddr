@@ -11,7 +11,8 @@
 //   - axi_aclk / axi_aresetn : AXI4 protocol and user-facing timing
 //   - dfi_clk  / dfi_rst_n   : DFI-side timing (often 1:1 or ratioed to DRAM)
 //
-// Functional note: AXI4 handshaking, CDC, SLVERR for unsupported requests.
+// Functional note: AXI4 handshaking, CDC, SLVERR for unsupported requests and
+//  read-data timeout (no dfi_rddata_valid within MC_RD_DV_MAX).
 // The dfi_clk domain includes an SDRAM-style open-page scheduler: per-bank
 // row tracking, PRE (wrong row or closed), ACT, then READ/WRITE CAS with
 // parameterized tRP, tRCD, and MC_CL. Refresh and multi-clock DFI phase buses
@@ -301,7 +302,8 @@ module axi4_to_dfi_bridge #(
     localparam integer RREQ_W = C_AXI_ID_WIDTH + C_AXI_ADDR_WIDTH;
 
     localparam integer BRESP_FIFO_W = C_AXI_ID_WIDTH;
-    localparam integer RRESP_FIFO_W = C_AXI_ID_WIDTH + C_AXI_DATA_WIDTH;
+    // MSB: 1 = SLVERR (no dfi_rddata_valid within MC_RD_DV_MAX); then ARID; then RDATA
+    localparam integer RRESP_FIFO_W = 1 + C_AXI_ID_WIDTH + C_AXI_DATA_WIDTH;
 
     localparam [C_AXI_ADDR_WIDTH-1:0] WADDR_INCR = C_AXI_DATA_WIDTH / 8;
 
@@ -459,6 +461,8 @@ module axi4_to_dfi_bridge #(
     reg  [NBANKS-1:0]        row_open_mask;
     reg  [MC_ROW_BITS-1:0]   open_row_mem [0:NBANKS-1];
     reg  [C_AXI_DATA_WIDTH-1:0] r_capture;
+    reg                      mc_got_rddata;
+    integer                  open_row_rst_i;
 
     wire [C_AXI_ADDR_WIDTH-1:0] wreq_addr =
         wreq_snapshot[STROBE_W+C_AXI_DATA_WIDTH +: C_AXI_ADDR_WIDTH];
@@ -491,7 +495,7 @@ module axi4_to_dfi_bridge #(
     wire [BRESP_FIFO_W-1:0] bresp_wr_data = mc_id;
 
     wire rresp_wr_en = (mc_state == ST_PULSE_R) && !rresp_full;
-    wire [RRESP_FIFO_W-1:0] rresp_wr_data = {mc_id, r_capture};
+    wire [RRESP_FIFO_W-1:0] rresp_wr_data = {!mc_got_rddata, mc_id, r_capture};
 
     wire bresp_rd_en;
     wire bresp_empty;
@@ -539,9 +543,11 @@ module axi4_to_dfi_bridge #(
     assign s_axi_bvalid = bresp_err_valid || !bresp_empty;
     assign bresp_rd_en = !bresp_err_valid && s_axi_bvalid && s_axi_bready;
 
+    wire r_fifo_mc_slverr = rresp_rdata[C_AXI_DATA_WIDTH + C_AXI_ID_WIDTH];
+
     assign s_axi_rid   = rresp_err_valid ? rresp_err_id : rresp_rdata[C_AXI_DATA_WIDTH +: C_AXI_ID_WIDTH];
     assign s_axi_rdata = rresp_err_valid ? {C_AXI_DATA_WIDTH{1'b0}} : rresp_rdata[C_AXI_DATA_WIDTH-1:0];
-    assign s_axi_rresp = rresp_err_valid ? 2'b10 : 2'b00;
+    assign s_axi_rresp = rresp_err_valid ? 2'b10 : (r_fifo_mc_slverr ? 2'b10 : 2'b00);
     assign s_axi_rlast = 1'b1;
     assign s_axi_ruser = {C_AXI_RUSER_WIDTH{1'b0}};
     assign s_axi_rvalid = rresp_err_valid || !rresp_empty;
@@ -663,14 +669,9 @@ module axi4_to_dfi_bridge #(
             mc_wr_last_beat  <= 1'b0;
             row_open_mask    <= {NBANKS{1'b0}};
             r_capture        <= {C_AXI_DATA_WIDTH{1'b0}};
-            open_row_mem[0]  <= {MC_ROW_BITS{1'b0}};
-            open_row_mem[1]  <= {MC_ROW_BITS{1'b0}};
-            open_row_mem[2]  <= {MC_ROW_BITS{1'b0}};
-            open_row_mem[3]  <= {MC_ROW_BITS{1'b0}};
-            open_row_mem[4]  <= {MC_ROW_BITS{1'b0}};
-            open_row_mem[5]  <= {MC_ROW_BITS{1'b0}};
-            open_row_mem[6]  <= {MC_ROW_BITS{1'b0}};
-            open_row_mem[7]  <= {MC_ROW_BITS{1'b0}};
+            mc_got_rddata    <= 1'b0;
+            for (open_row_rst_i = 0; open_row_rst_i < NBANKS; open_row_rst_i = open_row_rst_i + 1)
+                open_row_mem[open_row_rst_i] <= {MC_ROW_BITS{1'b0}};
         end else begin
             if (wreq_rd_en)
                 wreq_snapshot <= wreq_rdata;
@@ -796,6 +797,7 @@ module axi4_to_dfi_bridge #(
                     dfi_cs_n      <= {DFI_CS_WIDTH{1'b0}};
                     dfi_rddata_en <= 1'b1;
                     r_capture     <= {C_AXI_DATA_WIDTH{1'b0}};
+                    mc_got_rddata <= 1'b0;
                     mc_ctr        <= MC_CL[7:0];
                     mc_state      <= ST_WAIT_CL;
                 end
@@ -807,8 +809,10 @@ module axi4_to_dfi_bridge #(
                         mc_ctr <= mc_ctr - 8'd1;
                 end
                 ST_WAIT_DV: begin
-                    if (dfi_rddata_valid)
-                        r_capture <= dfi_rddata[C_AXI_DATA_WIDTH-1:0];
+                    if (dfi_rddata_valid) begin
+                        r_capture     <= dfi_rddata[C_AXI_DATA_WIDTH-1:0];
+                        mc_got_rddata <= 1'b1;
+                    end
                     if (dfi_rddata_valid || (mc_ctr == 8'd0))
                         mc_state <= ST_PULSE_R;
                     else

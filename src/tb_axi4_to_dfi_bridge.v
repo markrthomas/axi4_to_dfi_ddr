@@ -304,8 +304,11 @@ module tb;
     integer tb_read_addr_rd_ptr;
     // Pulse high (dfi_clk domain) to clear PHY read pipeline and rd_ptr
     reg                          tb_read_model_rst;
+    // When high, drop the dfi_rddata_valid pulse (read MC timeout / SLVERR path)
+    reg                          tb_phy_suppress_rddv;
 
     initial tb_read_model_rst = 1'b0;
+    initial tb_phy_suppress_rddv = 1'b0;
 
     // wr_ptr / queue entries updated only from tasks (avoid race with arvalid drop same cycle)
     task tb_push_read_addr;
@@ -348,9 +351,12 @@ module tb;
                 phy_rd_lat <= TB_PHY_MC_CL[7:0];
             else if (phy_rd_lat != 8'd0) begin
                 if (phy_rd_lat == 8'd1) begin
-                    dfi_rddata_valid <= 1'b1;
-                    dfi_rddata <= {32'hA5A5A5A5, 14'h0,
-                                   tb_read_addr_q[tb_read_addr_rd_ptr[3:0]][DFI_ADDR_WIDTH-1:0]};
+                    if (!tb_phy_suppress_rddv) begin
+                        dfi_rddata_valid <= 1'b1;
+                        dfi_rddata <= {32'hA5A5A5A5, 14'h0,
+                                       tb_read_addr_q[tb_read_addr_rd_ptr[3:0]][DFI_ADDR_WIDTH-1:0]};
+                    end
+                    // Advance queue whenever the MC read window ends (valid or suppressed timeout)
                     tb_read_addr_rd_ptr <= tb_read_addr_rd_ptr + 1;
                     phy_rd_lat <= 8'd0;
                 end else
@@ -787,6 +793,29 @@ module tb;
 
         repeat (4) @(posedge axi_aclk);
 
+        // --- Test 2b: read data timeout -> SLVERR (PHY withholds dfi_rddata_valid) ---
+        tb_phy_suppress_rddv = 1'b1;
+        axi_read_single(32'h0000_0280, 4'hE);
+        while (!s_axi_rvalid)
+            @(posedge axi_aclk);
+        if (s_axi_rid !== 4'hE) begin
+            $display("FAIL: read-timeout RID mismatch exp %h got %h", 4'hE, s_axi_rid);
+            errors = errors + 1;
+        end
+        if (s_axi_rdata !== {C_AXI_DATA_WIDTH{1'b0}}) begin
+            $display("FAIL: read-timeout RDATA exp 0 got %h", s_axi_rdata);
+            errors = errors + 1;
+        end
+        if (s_axi_rresp !== 2'b10) begin
+            $display("FAIL: read-timeout RRESP exp SLVERR got %b", s_axi_rresp);
+            errors = errors + 1;
+        end
+        s_axi_rready = 1'b1;
+        @(posedge axi_aclk);
+        s_axi_rready = 1'b0;
+        tb_phy_suppress_rddv = 1'b0;
+        repeat (8) @(posedge axi_aclk);
+
         // --- Test 3: baseline write/read ---
         axi_write_single(32'h0000_1000, 4'h3, 64'hDEADBEEF_00000001, 8'hFF);
         axi_wait_b(4'h3);
@@ -873,7 +902,7 @@ module tb;
         repeat (20) @(posedge axi_aclk);
 
         if (errors == 0)
-            $display("PASS: tb_axi4_to_dfi_bridge (init_start pulse + init gating + SLVERR + backpressure + MC checks)");
+            $display("PASS: tb_axi4_to_dfi_bridge (init_start pulse + init gating + SLVERR + read timeout + backpressure + MC checks)");
         else
             $display("FAIL: tb_axi4_to_dfi_bridge errors=%0d", errors);
         $finish;

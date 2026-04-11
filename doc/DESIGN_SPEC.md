@@ -94,10 +94,10 @@ A **single-transaction** SDRAM-style **open-page** FSM drives `dfi_*` (one AXI-e
 
 1. **AXI**: When AW and W present a **legal** write (`aw_ok`, full bus `AWSIZE`, INCR `AWBURST`), the bridge may push one packed word per **W beat** into **`u_fifo_wreq`** on `axi_aclk`. **Reads** remain single-beat (`ARLEN == 0`) as in section 4.2.
    - **Single-beat**: `AWLEN == 0` and `WLAST` must be high on that beat.
-   - **INCR burst (writes only)**: parameter **`C_MAX_WRITE_AWLEN`** (default **3**) allows `AWLEN` in **0…C_MAX_WRITE_AWLEN** (up to **four** beats for the default). **`WLAST`** must be low on all beats except the last; the last beat’s index must equal **`AWLEN`**. After each non-final beat, the held **`AWADDR`** is advanced by **`C_AXI_DATA_WIDTH/8`** for the next FIFO entry.
+   - **INCR burst (writes only)**: parameter **`C_MAX_WRITE_AWLEN`** (default **3**) allows `AWLEN` in **0...C_MAX_WRITE_AWLEN** (up to **four** beats for the default). **`WLAST`** must be low on all beats except the last; the last beat's index must equal **`AWLEN`**. After each non-final beat, the held **`AWADDR`** is advanced by **`C_AXI_DATA_WIDTH/8`** for the next FIFO entry.
 2. **Pack format** (`WREQ_W` bits): **MSB** = **`WLAST`** for that beat; then `AWID`, `AWADDR`, `WDATA`, `WSTRB`.
 3. **DFI**: The memory-controller FSM (section 3.5) may issue **PRE/ACT** before each **WRITE** CAS; `dfi_wrdata` / `dfi_wrdata_mask` / `dfi_wrdata_en` align with each WRITE CAS cycle.
-4. **Response**: After each WRITE CAS, the FSM waits **`DFI_WRITE_ACK_CYCLES`** on `dfi_clk`. Only when that beat’s stored **`WLAST`** is **1** does the bridge push **`AWID`** into **`u_fifo_bresp`** (one **B** for the whole burst). The AXI domain pops this FIFO to assert **`BVALID`** with **`BRESP = OKAY`**.
+4. **Response**: After each WRITE CAS, the FSM waits **`DFI_WRITE_ACK_CYCLES`** on `dfi_clk`. Only when that beat's stored **`WLAST`** is **1** does the bridge push **`AWID`** into **`u_fifo_bresp`** (one **B** for the whole burst). The AXI domain pops this FIFO to assert **`BVALID`** with **`BRESP = OKAY`**.
 
 AW/W **holding registers** allow address and data to arrive in separate cycles before a matching pair is pushed; beat counting for **`WLAST`** checks treats a same-cycle **`AWVALID`/`AWREADY`** handshake as starting the burst at beat **0** even if the running beat counter register is non-zero from an earlier transaction.
 
@@ -105,8 +105,8 @@ AW/W **holding registers** allow address and data to arrive in separate cycles b
 
 1. **AXI**: Legal AR (`ar_ok`) pushes `{ARID, ARADDR}` into **`u_fifo_rreq`**.
 2. **DFI**: The FSM may issue **PRE/ACT** before a **READ** CAS; **`dfi_rddata_en`** is asserted for one cycle on the READ CAS.
-3. **Data**: After **`MC_CL`**, the FSM waits in a read-data window for **`dfi_rddata_valid`** (timeout **`MC_RD_DV_MAX`**); then **`r_capture`** is pushed with **`ARID`** to **`u_fifo_rresp`** via a one-cycle **`ST_PULSE_R`**.
-4. **AXI**: Pop yields **`RVALID`**, **`RLAST = 1`**, **`RRESP = OKAY`** for this single-beat design.
+3. **Data**: After **`MC_CL`**, the FSM waits in a read-data window for **`dfi_rddata_valid`** (timeout **`MC_RD_DV_MAX`**); then read data (or a timeout indication) is pushed with **`ARID`** to **`u_fifo_rresp`** via a one-cycle **`ST_PULSE_R`**.
+4. **AXI**: Pop yields **`RVALID`**, **`RLAST = 1`**. **`RRESP = OKAY`** when the PHY returned read data in time; if **`dfi_rddata_valid`** never arrived before the timeout, **`RRESP = SLVERR`** and **`RDATA = 0`** (same encoding as an illegal **AR** decode error).
 
 ## 4.3 Arbitration
 
@@ -116,7 +116,7 @@ While **`dfi_mc_ready`** is true, the DFI side serves **writes before reads** wh
 
 Unsupported or illegal shapes are rejected with **SLVERR** (`2'b10`) where implemented.
 
-- **Reads**: If **`ar_ok`** is false and an AR handshake completes, **`rresp_err_valid`** is raised; **`RVALID`** carries **`RRESP = SLVERR`**, **`RDATA = 0`**, and the captured **`ARID`**.
+- **Reads**: If **`ar_ok`** is false and an AR handshake completes, **`rresp_err_valid`** is raised; **`RVALID`** carries **`RRESP = SLVERR`**, **`RDATA = 0`**, and the captured **`ARID`**. If the memory-controller read window expires without **`dfi_rddata_valid`**, the read response uses **`RRESP = SLVERR`**, **`RDATA = 0`**, and the **`ARID`** for that transaction (via the **`rresp`** FIFO).
 - **Writes**: If AW and W form an illegal pair (e.g. wrong burst/length/last), the bridge can enter a **drain** path: absorb remaining W beats if required, then assert **`BVALID`** with **`BRESP = SLVERR`** and the relevant ID.
 
 Exact decode conditions are defined in **`src/axi4_to_dfi_bridge.v`** (combinational `aw_ok` / `ar_ok`, `write_pair_error`, and the AXI-domain sequential FSM).
@@ -147,7 +147,7 @@ Exact decode conditions are defined in **`src/axi4_to_dfi_bridge.v`** (combinati
 | `MC_CL` | CAS-to-read-data phase length (PHY should align). |
 | `MC_RD_DV_MAX` | Max cycles to wait for `dfi_rddata_valid` after `MC_CL`. |
 | `DFI_INIT_START_CYCLES` | MC init: pulse `dfi_init_start` high for this many `dfi_clk` cycles after reset release; **0** ties off. |
-| `C_MAX_WRITE_AWLEN` | Legal **INCR** write burst length: **`AWLEN`** must be ≤ this value (default **3** = four beats). **0** restricts writes to single-beat only. |
+| `C_MAX_WRITE_AWLEN` | Legal **INCR** write burst length: **`AWLEN`** must be no greater than this value (default **3** = four beats). **0** restricts writes to single-beat only. |
 
 # 8. Verification
 
@@ -167,6 +167,7 @@ Build and run: **`make -C test run`** (see repository **README.md**).
 | 0.2 | Document SDRAM open-page scheduler and MC_* parameters. |
 | 0.3 | DFI fidelity slice: `dfi_act_n` on ACT; `DFI_INIT_START_CYCLES` for optional `dfi_init_start` pulse. |
 | 0.4 | INCR write bursts up to `C_MAX_WRITE_AWLEN` (default four beats): one `wreq` FIFO entry per W beat (MSB = `WLAST`); one **B** after the last beat. |
+| 0.5 | Read data timeout reports **SLVERR**; `open_row_mem` reset covers all banks; PDF-friendly ASCII in this source. |
 
 # Document control
 
