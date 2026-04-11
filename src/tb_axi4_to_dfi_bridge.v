@@ -33,6 +33,7 @@ module tb;
 
     integer errors;
     integer tb_qi;
+    integer tb_init_start_hi;
 
     // Asynchronous clocks (CDC path in DUT)
     reg axi_aclk;
@@ -123,7 +124,9 @@ module tb;
     reg                          dfi_rddata_valid;
     wire                         dfi_rddata_en;
 
-    axi4_to_dfi_bridge dut (
+    axi4_to_dfi_bridge #(
+        .DFI_INIT_START_CYCLES(4)
+    ) dut (
         .axi_aclk           (axi_aclk),
         .axi_aresetn        (axi_aresetn),
         .s_axi_awid         (s_axi_awid),
@@ -423,6 +426,38 @@ module tb;
         end
     endtask
 
+    // INCR write burst: awlen = beats-1 (max 3 for default DUT), full-width, one B after all beats
+    task axi_write_incr_burst;
+        input [C_AXI_ADDR_WIDTH-1:0] base_addr;
+        input [C_AXI_ID_WIDTH-1:0]     id;
+        input [7:0]                    awlen;
+        input [C_AXI_DATA_WIDTH-1:0]   first_data;
+        integer k;
+        begin
+            s_axi_awid    = id;
+            s_axi_awaddr  = base_addr;
+            s_axi_awlen   = awlen;
+            s_axi_awburst = 2'b01;
+            s_axi_awvalid = 1'b1;
+            @(posedge axi_aclk);
+            while (!s_axi_awready)
+                @(posedge axi_aclk);
+            s_axi_awvalid = 1'b0;
+
+            for (k = 0; k <= awlen; k = k + 1) begin
+                s_axi_wdata   = first_data + (k * 64'h8);
+                s_axi_wstrb   = 8'hFF;
+                s_axi_wlast   = (k == awlen);
+                s_axi_wvalid  = 1'b1;
+                @(posedge axi_aclk);
+                while (!s_axi_wready)
+                    @(posedge axi_aclk);
+                s_axi_wvalid  = 1'b0;
+            end
+            s_axi_awlen = 8'd0;
+        end
+    endtask
+
     task axi_write_aw_then_w;
         input [C_AXI_ADDR_WIDTH-1:0] addr;
         input [C_AXI_ID_WIDTH-1:0]     id;
@@ -647,6 +682,15 @@ module tb;
         repeat (5) @(posedge axi_aclk);
         @(negedge dfi_clk);
         dfi_rst_n = 1'b1;
+        tb_init_start_hi = 0;
+        repeat (12) @(posedge dfi_clk) begin
+            if (dfi_init_start)
+                tb_init_start_hi = tb_init_start_hi + 1;
+        end
+        if (tb_init_start_hi !== 4) begin
+            $display("FAIL: dfi_init_start high cycles exp 4 got %0d", tb_init_start_hi);
+            errors = errors + 1;
+        end
         repeat (3) @(posedge axi_aclk);
         axi_aresetn = 1'b1;
 
@@ -674,25 +718,18 @@ module tb;
         repeat (6) @(posedge axi_aclk);
 
         // --- Test 2: unsupported requests must complete with SLVERR ---
-        s_axi_awid    = 4'hC;
-        s_axi_awaddr  = 32'h0000_0200;
-        s_axi_awlen   = 8'd1;
-        s_axi_awvalid = 1'b1;
+        // INCR bursts up to AWLEN=3 are supported; use FIXED burst (illegal shape)
+        s_axi_awid     = 4'hC;
+        s_axi_awaddr   = 32'h0000_0200;
+        s_axi_awlen    = 8'd0;
+        s_axi_awburst  = 2'b00;
+        s_axi_awvalid  = 1'b1;
         @(posedge axi_aclk);
         while (!s_axi_awready)
             @(posedge axi_aclk);
-        s_axi_awvalid = 1'b0;
+        s_axi_awvalid  = 1'b0;
 
         s_axi_wdata   = 64'h11112222_33334444;
-        s_axi_wstrb   = 8'hFF;
-        s_axi_wlast   = 1'b0;
-        s_axi_wvalid  = 1'b1;
-        @(posedge axi_aclk);
-        while (!s_axi_wready)
-            @(posedge axi_aclk);
-        s_axi_wvalid  = 1'b0;
-
-        s_axi_wdata   = 64'h55556666_77778888;
         s_axi_wstrb   = 8'hFF;
         s_axi_wlast   = 1'b1;
         s_axi_wvalid  = 1'b1;
@@ -700,7 +737,7 @@ module tb;
         while (!s_axi_wready)
             @(posedge axi_aclk);
         s_axi_wvalid  = 1'b0;
-        s_axi_awlen   = 8'd0;
+        s_axi_awburst = 2'b01;
 
         while (!s_axi_bvalid)
             @(posedge axi_aclk);
@@ -755,6 +792,18 @@ module tb;
         axi_wait_b(4'h3);
         axi_read_single(32'h0000_1000, 4'h4);
         axi_wait_r(4'h4, expected_rdata(32'h0000_1000));
+
+        // --- Test 3b: INCR write burst (AWLEN=3, four beats), single B response ---
+        axi_write_incr_burst(32'h0000_9000, 4'h1, 8'd3, 64'hBEEF9000_00000001);
+        axi_wait_b(4'h1);
+        axi_read_single(32'h0000_9000, 4'h2);
+        axi_wait_r(4'h2, expected_rdata(32'h0000_9000));
+        axi_read_single(32'h0000_9008, 4'h3);
+        axi_wait_r(4'h3, expected_rdata(32'h0000_9008));
+        axi_read_single(32'h0000_9010, 4'h4);
+        axi_wait_r(4'h4, expected_rdata(32'h0000_9010));
+        axi_read_single(32'h0000_9018, 4'h5);
+        axi_wait_r(4'h5, expected_rdata(32'h0000_9018));
 
         // --- Test 4: AW and W on separate cycles ---
         axi_write_aw_then_w(32'h0000_2008, 4'h1, 64'hCAFEBABE_12345678, 8'hFF);
@@ -824,7 +873,7 @@ module tb;
         repeat (20) @(posedge axi_aclk);
 
         if (errors == 0)
-            $display("PASS: tb_axi4_to_dfi_bridge (init gating + SLVERR + backpressure + MC PRE/ACT/CAS checks)");
+            $display("PASS: tb_axi4_to_dfi_bridge (init_start pulse + init gating + SLVERR + backpressure + MC checks)");
         else
             $display("FAIL: tb_axi4_to_dfi_bridge errors=%0d", errors);
         $finish;

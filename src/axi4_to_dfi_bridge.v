@@ -14,8 +14,9 @@
 // Functional note: AXI4 handshaking, CDC, SLVERR for unsupported requests.
 // The dfi_clk domain includes an SDRAM-style open-page scheduler: per-bank
 // row tracking, PRE (wrong row or closed), ACT, then READ/WRITE CAS with
-// parameterized tRP, tRCD, and MC_CL. Refresh and multi-phase DFI are not
-// implemented (see parameters MC_*).
+// parameterized tRP, tRCD, and MC_CL. Refresh and multi-clock DFI phase buses
+// (P0–P3) are not implemented. dfi_act_n is low only during ACT; optional
+// dfi_init_start pulse after reset uses DFI_INIT_START_CYCLES (default 0).
 //=============================================================================
 
 `timescale 1ns / 1ps
@@ -132,7 +133,7 @@ module async_fifo_gray #(
 endmodule
 
 //-----------------------------------------------------------------------------
-// AXI4 -> DFI bridge (single-beat AXI4; INCR bursts with ARLEN/AWLEN == 0)
+// AXI4 -> DFI bridge (INCR write bursts up to C_MAX_WRITE_AWLEN; reads single-beat)
 //-----------------------------------------------------------------------------
 module axi4_to_dfi_bridge #(
     parameter integer C_AXI_ADDR_WIDTH = 32,
@@ -165,7 +166,13 @@ module axi4_to_dfi_bridge #(
     parameter integer MC_T_RP      = 4,  // PRE to ACT
     parameter integer MC_T_RCD     = 4,  // ACT to READ/WRITE command
     parameter integer MC_CL        = 6,  // CAS to first read data (PHY should align)
-    parameter integer MC_RD_DV_MAX = 16   // cycles to wait for dfi_rddata_valid after CL
+    parameter integer MC_RD_DV_MAX = 16,  // cycles to wait for dfi_rddata_valid after CL
+
+    // DFI sideband: pulse dfi_init_start for this many dfi_clk cycles after reset release (0 = tie off)
+    parameter integer DFI_INIT_START_CYCLES = 0,
+
+    // AXI write: max AWLEN for legal INCR bursts (0 = single-beat only; default 3 = up to 4 beats)
+    parameter integer C_MAX_WRITE_AWLEN = 3
 ) (
     // --- AXI4 clock / reset (AMBA AXI4) ---
     input  wire                          axi_aclk,
@@ -267,23 +274,41 @@ module axi4_to_dfi_bridge #(
     assign dfi_ctrlupd_req  = 1'b0;
     assign dfi_phyupd_req   = 1'b0;
     assign dfi_lp_ctrl_req  = 1'b0;
-    assign dfi_init_start   = 1'b0; // Stub: drive real MC init sequence if needed
+
+    // Optional MC -> PHY init pulse (DFI: controller may pulse init_start during DRAM init)
+    reg                      dfi_init_start_q;
+    reg  [15:0]              dfi_init_start_ctr;
+
+    assign dfi_init_start = (DFI_INIT_START_CYCLES > 0) ? dfi_init_start_q : 1'b0;
+
+    always @(posedge dfi_clk or negedge dfi_rst_n) begin
+        if (!dfi_rst_n) begin
+            dfi_init_start_q   <= 1'b0;
+            dfi_init_start_ctr <= DFI_INIT_START_CYCLES[15:0];
+        end else if (dfi_init_start_ctr != 16'd0) begin
+            dfi_init_start_q   <= 1'b1;
+            dfi_init_start_ctr <= dfi_init_start_ctr - 16'd1;
+        end else
+            dfi_init_start_q <= 1'b0;
+    end
 
     //-------------------------------------------------------------------------
     // FIFO payloads (packed)
     //-------------------------------------------------------------------------
     localparam integer WREQ_W = 1 + C_AXI_ID_WIDTH + C_AXI_ADDR_WIDTH + C_AXI_DATA_WIDTH + STROBE_W;
-    // op[0]=0 write request: id, addr, data, strb
+    // MSB = AXI WLAST for this beat; then id, addr, data, strb (one FIFO entry per W beat)
 
     localparam integer RREQ_W = C_AXI_ID_WIDTH + C_AXI_ADDR_WIDTH;
 
     localparam integer BRESP_FIFO_W = C_AXI_ID_WIDTH;
     localparam integer RRESP_FIFO_W = C_AXI_ID_WIDTH + C_AXI_DATA_WIDTH;
 
+    localparam [C_AXI_ADDR_WIDTH-1:0] WADDR_INCR = C_AXI_DATA_WIDTH / 8;
+
     //-------------------------------------------------------------------------
-    // AXI: accept only AXI4 INCR, single beat (len==0), full-width transfers
+    // AXI: INCR writes up to C_MAX_WRITE_AWLEN; reads single-beat only; full-width size
     //-------------------------------------------------------------------------
-    wire aw_ok = (s_axi_awburst == 2'b01) && (s_axi_awlen == 8'd0) &&
+    wire aw_ok = (s_axi_awburst == 2'b01) && (s_axi_awlen <= C_MAX_WRITE_AWLEN) &&
                  (s_axi_awsize == $clog2(C_AXI_DATA_WIDTH/8));
     wire ar_ok = (s_axi_arburst == 2'b01) && (s_axi_arlen == 8'd0) &&
                  (s_axi_arsize == $clog2(C_AXI_DATA_WIDTH/8));
@@ -340,11 +365,17 @@ module axi4_to_dfi_bridge #(
     wire w_pair_last =
         w_hold_valid ? w_hold_last : s_axi_wlast;
 
-    wire wreq_wr_en = aw_pair_valid && w_pair_valid && aw_pair_ok &&
-                      w_pair_last && !wreq_full;
-    wire [WREQ_W-1:0] wreq_push_vec = {1'b0, aw_pair_id, aw_pair_addr, w_pair_data, w_pair_strb};
-    wire write_pair_error = aw_pair_valid && w_pair_valid &&
-                            (!aw_pair_ok || !w_pair_last);
+    reg [7:0] w_axi_beat_idx;
+
+    // Registered beat counter can be stale from a prior txn; same-cycle AW fire starts a new burst at 0
+    wire [7:0] w_beat_effective = aw_fire ? 8'd0 : w_axi_beat_idx;
+    wire wlast_expected = (w_beat_effective == aw_pair_len);
+    wire wlast_bad      = aw_pair_valid && w_pair_valid && aw_pair_ok &&
+                          (w_pair_last != wlast_expected);
+
+    wire wreq_wr_en = aw_pair_valid && w_pair_valid && aw_pair_ok && !wlast_bad && !wreq_full;
+    wire [WREQ_W-1:0] wreq_push_vec = {w_pair_last, aw_pair_id, aw_pair_addr, w_pair_data, w_pair_strb};
+    wire write_pair_error = aw_pair_valid && w_pair_valid && (!aw_pair_ok || wlast_bad);
     wire write_pair_error_needs_drain = (aw_pair_len != 8'd0) ||
                                         ((aw_pair_len == 8'd0) && !w_pair_last);
     wire write_err_done = write_err_active && w_fire &&
@@ -424,6 +455,7 @@ module axi4_to_dfi_bridge #(
     reg  [DFI_BANK_WIDTH-1:0] mc_bank;
     reg  [MC_ROW_BITS-1:0]   mc_row;
     reg  [MC_COL_BITS-1:0]   mc_col;
+    reg                      mc_wr_last_beat;
     reg  [NBANKS-1:0]        row_open_mask;
     reg  [MC_ROW_BITS-1:0]   open_row_mem [0:NBANKS-1];
     reg  [C_AXI_DATA_WIDTH-1:0] r_capture;
@@ -454,7 +486,8 @@ module axi4_to_dfi_bridge #(
     wire bresp_full;
     wire rresp_full;
 
-    wire bresp_wr_en = (mc_state == ST_WAIT_B) && (mc_ctr == 8'd1) && !bresp_full;
+    wire bresp_wr_en = (mc_state == ST_WAIT_B) && (mc_ctr == 8'd1) && !bresp_full &&
+                       mc_wr_last_beat;
     wire [BRESP_FIFO_W-1:0] bresp_wr_data = mc_id;
 
     wire rresp_wr_en = (mc_state == ST_PULSE_R) && !rresp_full;
@@ -533,6 +566,7 @@ module axi4_to_dfi_bridge #(
             write_err_wait_last <= 1'b0;
             write_err_beats_left <= 8'd0;
             write_err_id        <= {C_AXI_ID_WIDTH{1'b0}};
+            w_axi_beat_idx      <= 8'd0;
         end else begin
             if (bresp_err_valid && s_axi_bready)
                 bresp_err_valid <= 1'b0;
@@ -556,13 +590,10 @@ module axi4_to_dfi_bridge #(
                 write_err_beats_left <= write_err_beats_left - 8'd1;
             end
 
-            if (wreq_wr_en) begin
+            if (write_pair_error) begin
                 aw_hold_valid <= 1'b0;
                 w_hold_valid  <= 1'b0;
-            end else if (write_pair_error) begin
-                aw_hold_valid <= 1'b0;
-                w_hold_valid  <= 1'b0;
-                if (write_pair_error_needs_drain) begin
+                if (!aw_pair_ok && write_pair_error_needs_drain) begin
                     write_err_active    <= 1'b1;
                     write_err_wait_last <= (aw_pair_len == 8'd0) && !w_pair_last;
                     write_err_beats_left <= (aw_pair_len != 8'd0) ? aw_pair_len : 8'd0;
@@ -579,7 +610,16 @@ module axi4_to_dfi_bridge #(
                     aw_hold_ok    <= aw_ok;
                     aw_hold_len   <= s_axi_awlen;
                 end
-                if (w_fire && !write_err_active) begin
+                if (wreq_wr_en) begin
+                    w_hold_valid <= 1'b0;
+                    if (w_pair_last)
+                        aw_hold_valid <= 1'b0;
+                    else
+                        aw_hold_addr <= aw_hold_addr + WADDR_INCR;
+                    w_axi_beat_idx <= w_beat_effective + 8'd1;
+                end else if (aw_fire)
+                    w_axi_beat_idx <= 8'd0;
+                if (w_fire && !write_err_active && !wreq_wr_en) begin
                     w_hold_valid <= 1'b1;
                     w_hold_data  <= s_axi_wdata;
                     w_hold_strb  <= s_axi_wstrb;
@@ -620,6 +660,7 @@ module axi4_to_dfi_bridge #(
             mc_bank          <= {DFI_BANK_WIDTH{1'b0}};
             mc_row           <= {MC_ROW_BITS{1'b0}};
             mc_col           <= {MC_COL_BITS{1'b0}};
+            mc_wr_last_beat  <= 1'b0;
             row_open_mask    <= {NBANKS{1'b0}};
             r_capture        <= {C_AXI_DATA_WIDTH{1'b0}};
             open_row_mem[0]  <= {MC_ROW_BITS{1'b0}};
@@ -642,6 +683,7 @@ module axi4_to_dfi_bridge #(
             dfi_cas_n     <= 1'b1;
             dfi_we_n      <= 1'b1;
             dfi_cs_n      <= {DFI_CS_WIDTH{1'b1}};
+            dfi_act_n     <= 1'b1;
             dfi_wrdata_en <= 1'b0;
             dfi_rddata_en <= 1'b0;
 
@@ -649,6 +691,7 @@ module axi4_to_dfi_bridge #(
                 ST_IDLE: begin
                     if (wreq_rd_en_r) begin
                         mc_is_wr <= 1'b1;
+                        mc_wr_last_beat <= wreq_snapshot[WREQ_W-1];
                         mc_id    <= wreq_id;
                         mc_addr  <= wreq_addr;
                         mc_wdata <= wreq_snapshot[C_AXI_DATA_WIDTH+STROBE_W-1:STROBE_W];
@@ -705,6 +748,7 @@ module axi4_to_dfi_bridge #(
                 ST_ACT_CMD: begin
                     dfi_bank    <= mc_bank;
                     dfi_address <= mc_row;
+                    dfi_act_n   <= 1'b0;
                     dfi_ras_n   <= 1'b0;
                     dfi_cas_n   <= 1'b1;
                     dfi_we_n    <= 1'b1;
@@ -735,7 +779,10 @@ module axi4_to_dfi_bridge #(
                 end
                 ST_WAIT_B: begin
                     if (mc_ctr == 8'd1) begin
-                        if (!bresp_full)
+                        if (mc_wr_last_beat) begin
+                            if (!bresp_full)
+                                mc_state <= ST_IDLE;
+                        end else
                             mc_state <= ST_IDLE;
                     end else
                         mc_ctr <= mc_ctr - 8'd1;

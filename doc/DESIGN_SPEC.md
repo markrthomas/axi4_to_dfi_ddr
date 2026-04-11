@@ -92,12 +92,14 @@ A **single-transaction** SDRAM-style **open-page** FSM drives `dfi_*` (one AXI-e
 
 ## 4.1 Write path (supported transfers)
 
-1. **AXI**: When AW and W present a **legal** single-beat write (`aw_ok`, `WLAST` aligned with `AWLEN == 0`, full bus `AWSIZE`, INCR `AWBURST`), the bridge may push a packed word into **`u_fifo_wreq`** on `axi_aclk`.
-2. **Pack format** (`WREQ_W` bits): reserved bit, `AWID`, `AWADDR`, `WDATA`, `WSTRB`.
-3. **DFI**: The memory-controller FSM (section 3.5) may issue **PRE/ACT** before a **WRITE** CAS; `dfi_wrdata` / `dfi_wrdata_mask` / `dfi_wrdata_en` align with the WRITE CAS cycle.
-4. **Response**: After the post-WRITE wait (**`DFI_WRITE_ACK_CYCLES`**) on `dfi_clk`, the bridge pushes **`AWID`** into **`u_fifo_bresp`**. The AXI domain pops this FIFO to assert **`BVALID`** with **`BRESP = OKAY`**.
+1. **AXI**: When AW and W present a **legal** write (`aw_ok`, full bus `AWSIZE`, INCR `AWBURST`), the bridge may push one packed word per **W beat** into **`u_fifo_wreq`** on `axi_aclk`. **Reads** remain single-beat (`ARLEN == 0`) as in section 4.2.
+   - **Single-beat**: `AWLEN == 0` and `WLAST` must be high on that beat.
+   - **INCR burst (writes only)**: parameter **`C_MAX_WRITE_AWLEN`** (default **3**) allows `AWLEN` in **0…C_MAX_WRITE_AWLEN** (up to **four** beats for the default). **`WLAST`** must be low on all beats except the last; the last beat’s index must equal **`AWLEN`**. After each non-final beat, the held **`AWADDR`** is advanced by **`C_AXI_DATA_WIDTH/8`** for the next FIFO entry.
+2. **Pack format** (`WREQ_W` bits): **MSB** = **`WLAST`** for that beat; then `AWID`, `AWADDR`, `WDATA`, `WSTRB`.
+3. **DFI**: The memory-controller FSM (section 3.5) may issue **PRE/ACT** before each **WRITE** CAS; `dfi_wrdata` / `dfi_wrdata_mask` / `dfi_wrdata_en` align with each WRITE CAS cycle.
+4. **Response**: After each WRITE CAS, the FSM waits **`DFI_WRITE_ACK_CYCLES`** on `dfi_clk`. Only when that beat’s stored **`WLAST`** is **1** does the bridge push **`AWID`** into **`u_fifo_bresp`** (one **B** for the whole burst). The AXI domain pops this FIFO to assert **`BVALID`** with **`BRESP = OKAY`**.
 
-AW/W **holding registers** allow address and data to arrive in separate cycles before a matching pair is pushed.
+AW/W **holding registers** allow address and data to arrive in separate cycles before a matching pair is pushed; beat counting for **`WLAST`** checks treats a same-cycle **`AWVALID`/`AWREADY`** handshake as starting the burst at beat **0** even if the running beat counter register is non-zero from an earlier transaction.
 
 ## 4.2 Read path (supported transfers)
 
@@ -123,13 +125,13 @@ Exact decode conditions are defined in **`src/axi4_to_dfi_bridge.v`** (combinati
 
 ## 6.1 Driven outputs (conceptual)
 
-- **Command**: `dfi_address`, `dfi_bank` (low address bits by default), `dfi_ras_n`, `dfi_cas_n`, `dfi_we_n`, `dfi_cs_n`, `dfi_cke`, `dfi_odt`, `dfi_act_n`: idle to NOP-like values except during illustrative read/write pulses.
+- **Command**: `dfi_address`, `dfi_bank` (low address bits by default), `dfi_ras_n`, `dfi_cas_n`, `dfi_we_n`, `dfi_cs_n`, `dfi_cke`, `dfi_odt`, `dfi_act_n`: idle to NOP-like values except during command pulses. **Row activate (ACT)** asserts `dfi_act_n` low for that cycle together with RAS/CAS/WE; PRE and READ/WRITE CAS keep `dfi_act_n` high.
 - **Write data**: `dfi_wrdata`, `dfi_wrdata_mask` (derived from `WSTRB` with PHY-specific interpretation noted in RTL comments), `dfi_wrdata_en`.
 - **Read data**: `dfi_rddata_en` during read command; expects **`dfi_rddata`** / **`dfi_rddata_valid`** from the PHY or model.
 
 ## 6.2 Stubbed / tied sidebands
 
-`dfi_ctrlupd_req`, `dfi_phyupd_req`, `dfi_lp_ctrl_req` are driven low; `dfi_init_start` is tied low (extend for real MC init). Integrators must connect **`dfi_init_complete`** from the PHY when ready.
+`dfi_ctrlupd_req`, `dfi_phyupd_req`, `dfi_lp_ctrl_req` are driven low. **`dfi_init_start`**: parameter **`DFI_INIT_START_CYCLES`** (default **0**) sets how many `dfi_clk` cycles the controller pulses `dfi_init_start` high after `dfi_rst_n` deasserts; **0** means the output is tied low (legacy behavior). Integrators must still connect **`dfi_init_complete`** from the PHY when ready.
 
 # 7. Parameters (top-level)
 
@@ -144,6 +146,8 @@ Exact decode conditions are defined in **`src/axi4_to_dfi_bridge.v`** (combinati
 | `MC_T_RP`, `MC_T_RCD` | PRE and ACT timing. |
 | `MC_CL` | CAS-to-read-data phase length (PHY should align). |
 | `MC_RD_DV_MAX` | Max cycles to wait for `dfi_rddata_valid` after `MC_CL`. |
+| `DFI_INIT_START_CYCLES` | MC init: pulse `dfi_init_start` high for this many `dfi_clk` cycles after reset release; **0** ties off. |
+| `C_MAX_WRITE_AWLEN` | Legal **INCR** write burst length: **`AWLEN`** must be ≤ this value (default **3** = four beats). **0** restricts writes to single-beat only. |
 
 # 8. Verification
 
@@ -161,6 +165,8 @@ Build and run: **`make -C test run`** (see repository **README.md**).
 |----------|---------|
 | 0.1 | Initial design specification from RTL structure. |
 | 0.2 | Document SDRAM open-page scheduler and MC_* parameters. |
+| 0.3 | DFI fidelity slice: `dfi_act_n` on ACT; `DFI_INIT_START_CYCLES` for optional `dfi_init_start` pulse. |
+| 0.4 | INCR write bursts up to `C_MAX_WRITE_AWLEN` (default four beats): one `wreq` FIFO entry per W beat (MSB = `WLAST`); one **B** after the last beat. |
 
 # Document control
 

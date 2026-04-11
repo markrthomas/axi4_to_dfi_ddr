@@ -108,9 +108,9 @@ Exact bus widths are **parameters** on `axi4_to_dfi_bridge` (default 32-bit AXI 
 ## Behavior notes
 
 - **Clocks**: `axi_aclk` / `axi_aresetn` for AXI; `dfi_clk` / `dfi_rst_n` for DFI-side sequencing and FIFO write ports. Traffic is gated on `dfi_init_complete` from the PHY side (tie high in a simple test).
-- **AXI**: Supported transfers follow the checks encoded in the RTL (for example **INCR**, **single-beat** `AWLEN`/`ARLEN == 0`, full-width `AWSIZE`/`ARSIZE`). Unsupported or illegal combinations are rejected with **AXI SLVERR** on the B/R channels where that logic is implemented; see the sources for the exact conditions.
+- **AXI**: Supported transfers follow the checks encoded in the RTL: **INCR** writes with `AWLEN` ≤ `C_MAX_WRITE_AWLEN` (default **3**, i.e. up to four beats), full-width `AWSIZE`; **reads** remain single-beat (`ARLEN == 0`, full-width `ARSIZE`). Unsupported or illegal combinations are rejected with **AXI SLVERR** on the B/R channels where that logic is implemented; see the sources for the exact conditions.
 - **DFI / memory controller**: The `dfi_clk` side runs an **open-page SDRAM-style** FSM (per-bank row tracking, PRE/ACT/CAS with `MC_T_RP`, `MC_T_RCD`, `MC_CL`). AXI addresses decode as `{bank,row,col}` in the low bits (`MC_*_BITS` parameters). **Refresh** and full JEDEC timing are not implemented yet.
-- **Roadmap (in order)**: (1) memory-controller core (open-page PRE/ACT/CAS, `MC_*`) — current RTL; (2) DFI fidelity; (3) richer AXI; (4) CDC/clock ratio; (5) verification; (6) synthesis; (7) docs.
+- **Roadmap (in order)**: (1) memory-controller core (open-page PRE/ACT/CAS, `MC_*`) — done; (2) DFI fidelity — in progress (`dfi_act_n` on ACT, optional `dfi_init_start` pulse via `DFI_INIT_START_CYCLES`; P0–P3 phase buses still out of scope); (3) richer AXI — **INCR write bursts** (parameterized `C_MAX_WRITE_AWLEN`, one **B** per burst) done; read bursts / reordering still out; (4) CDC/clock ratio; (5) verification; (6) synthesis; (7) docs.
 
 ## License
 
