@@ -254,6 +254,22 @@ module tb;
         end
     endtask
 
+    // Drop any completed AXI R/B beats (e.g. before stressing CDC FIFO depth)
+    task tb_flush_axi_rsp;
+        begin
+            while (s_axi_rvalid) begin
+                s_axi_rready = 1'b1;
+                @(posedge axi_aclk);
+            end
+            s_axi_rready = 1'b0;
+            while (s_axi_bvalid) begin
+                s_axi_bready = 1'b1;
+                @(posedge axi_aclk);
+            end
+            s_axi_bready = 1'b0;
+        end
+    endtask
+
     // Allow MC FSM + CDC to finish after last AXI handshake
     task tb_wait_dfi_mc;
         input integer dfi_cycles;
@@ -619,6 +635,34 @@ module tb;
         end
     endtask
 
+    // SLVERR read (decode error or MC read-data timeout)
+    task axi_wait_r_slverr;
+        input [C_AXI_ID_WIDTH-1:0] exp_id;
+        begin
+            while (!s_axi_rvalid)
+                @(posedge axi_aclk);
+            if (s_axi_rid !== exp_id) begin
+                $display("FAIL: SLVERR RID mismatch exp %h got %h", exp_id, s_axi_rid);
+                errors = errors + 1;
+            end
+            if (s_axi_rdata !== {C_AXI_DATA_WIDTH{1'b0}}) begin
+                $display("FAIL: SLVERR RDATA exp 0 got %h", s_axi_rdata);
+                errors = errors + 1;
+            end
+            if (s_axi_rresp !== 2'b10) begin
+                $display("FAIL: SLVERR RRESP exp 10 got %b", s_axi_rresp);
+                errors = errors + 1;
+            end
+            if (s_axi_rlast !== 1'b1) begin
+                $display("FAIL: SLVERR RLAST not set");
+                errors = errors + 1;
+            end
+            s_axi_rready = 1'b1;
+            @(posedge axi_aclk);
+            s_axi_rready = 1'b0;
+        end
+    endtask
+
     task axi_wait_r_stall;
         input [C_AXI_ID_WIDTH-1:0]     exp_id;
         input [C_AXI_DATA_WIDTH-1:0]   exp_data;
@@ -769,50 +813,14 @@ module tb;
         s_axi_arvalid = 1'b0;
         s_axi_arsize  = AXI_SIZE_FULL;
 
-        while (!s_axi_rvalid)
-            @(posedge axi_aclk);
-        if (s_axi_rid !== 4'hD) begin
-            $display("FAIL: RID mismatch exp %h got %h", 4'hD, s_axi_rid);
-            errors = errors + 1;
-        end
-        if (s_axi_rdata !== {C_AXI_DATA_WIDTH{1'b0}}) begin
-            $display("FAIL: RDATA mismatch exp %h got %h", {C_AXI_DATA_WIDTH{1'b0}}, s_axi_rdata);
-            errors = errors + 1;
-        end
-        if (s_axi_rresp !== 2'b10) begin
-            $display("FAIL: RRESP mismatch exp %b got %b", 2'b10, s_axi_rresp);
-            errors = errors + 1;
-        end
-        if (s_axi_rlast !== 1'b1) begin
-            $display("FAIL: RLAST not set");
-            errors = errors + 1;
-        end
-        s_axi_rready = 1'b1;
-        @(posedge axi_aclk);
-        s_axi_rready = 1'b0;
+        axi_wait_r_slverr(4'hD);
 
         repeat (4) @(posedge axi_aclk);
 
         // --- Test 2b: read data timeout -> SLVERR (PHY withholds dfi_rddata_valid) ---
         tb_phy_suppress_rddv = 1'b1;
         axi_read_single(32'h0000_0280, 4'hE);
-        while (!s_axi_rvalid)
-            @(posedge axi_aclk);
-        if (s_axi_rid !== 4'hE) begin
-            $display("FAIL: read-timeout RID mismatch exp %h got %h", 4'hE, s_axi_rid);
-            errors = errors + 1;
-        end
-        if (s_axi_rdata !== {C_AXI_DATA_WIDTH{1'b0}}) begin
-            $display("FAIL: read-timeout RDATA exp 0 got %h", s_axi_rdata);
-            errors = errors + 1;
-        end
-        if (s_axi_rresp !== 2'b10) begin
-            $display("FAIL: read-timeout RRESP exp SLVERR got %b", s_axi_rresp);
-            errors = errors + 1;
-        end
-        s_axi_rready = 1'b1;
-        @(posedge axi_aclk);
-        s_axi_rready = 1'b0;
+        axi_wait_r_slverr(4'hE);
         tb_phy_suppress_rddv = 1'b0;
         repeat (8) @(posedge axi_aclk);
 
@@ -899,10 +907,123 @@ module tb;
         mon_en = 1'b0;
         tb_check_mc_counts(0, 1, 0, 1);
 
+        // --- Test 9: RRESP async FIFO (depth 8) backs up with RREADY low; drain in issue order ---
+        s_axi_arvalid = 1'b0;
+        tb_flush_axi_rsp;
+        s_axi_rready = 1'b0;
+        tb_clear_read_addr_q;
+        tb_read_model_rst = 1'b1;
+        repeat (12) @(posedge dfi_clk);
+        tb_read_model_rst = 1'b0;
+        repeat (10) @(posedge axi_aclk);
+
+        // Unrolled. Space AR issues and R/B drains on axi_aclk: back-to-back handshakes
+        // plus FWFT async_fifo read can mis-order or repeat visible beats in iverilog sim.
+        axi_read_single(tb_mc_addr(3'd6, 14'd200, 10'd0), 4'h0);
+        repeat (2) @(posedge axi_aclk);
+        axi_read_single(tb_mc_addr(3'd6, 14'd200, 10'd8), 4'h1);
+        repeat (2) @(posedge axi_aclk);
+        axi_read_single(tb_mc_addr(3'd6, 14'd200, 10'd16), 4'h2);
+        repeat (2) @(posedge axi_aclk);
+        axi_read_single(tb_mc_addr(3'd6, 14'd200, 10'd24), 4'h3);
+        repeat (2) @(posedge axi_aclk);
+        axi_read_single(tb_mc_addr(3'd6, 14'd200, 10'd32), 4'h4);
+        repeat (2) @(posedge axi_aclk);
+        axi_read_single(tb_mc_addr(3'd6, 14'd200, 10'd40), 4'h5);
+        repeat (2) @(posedge axi_aclk);
+        axi_read_single(tb_mc_addr(3'd6, 14'd200, 10'd48), 4'h6);
+        repeat (2) @(posedge axi_aclk);
+        axi_read_single(tb_mc_addr(3'd6, 14'd200, 10'd56), 4'h7);
+        tb_wait_dfi_mc(2500);
+
+        axi_wait_r(4'h0, expected_rdata(tb_mc_addr(3'd6, 14'd200, 10'd0)));
+        repeat (6) @(posedge axi_aclk);
+        axi_wait_r(4'h1, expected_rdata(tb_mc_addr(3'd6, 14'd200, 10'd8)));
+        repeat (6) @(posedge axi_aclk);
+        axi_wait_r(4'h2, expected_rdata(tb_mc_addr(3'd6, 14'd200, 10'd16)));
+        repeat (6) @(posedge axi_aclk);
+        axi_wait_r(4'h3, expected_rdata(tb_mc_addr(3'd6, 14'd200, 10'd24)));
+        repeat (6) @(posedge axi_aclk);
+        axi_wait_r(4'h4, expected_rdata(tb_mc_addr(3'd6, 14'd200, 10'd32)));
+        repeat (6) @(posedge axi_aclk);
+        axi_wait_r(4'h5, expected_rdata(tb_mc_addr(3'd6, 14'd200, 10'd40)));
+        repeat (6) @(posedge axi_aclk);
+        axi_wait_r(4'h6, expected_rdata(tb_mc_addr(3'd6, 14'd200, 10'd48)));
+        repeat (6) @(posedge axi_aclk);
+        axi_wait_r(4'h7, expected_rdata(tb_mc_addr(3'd6, 14'd200, 10'd56)));
+
+        // --- Test 10: BRESP async FIFO (depth 8) backs up with BREADY low; drain in completion order ---
+        tb_flush_axi_rsp;
+        s_axi_bready = 1'b0;
+        tb_wait_dfi_mc(64);
+        axi_write_single(tb_mc_addr(3'd2, 14'd88, 10'd0), 4'h0, 64'hB0DF0000_00000000, 8'hFF);
+        repeat (2) @(posedge axi_aclk);
+        axi_write_single(tb_mc_addr(3'd2, 14'd88, 10'd8), 4'h1, 64'hB0DF0000_00000001, 8'hFF);
+        repeat (2) @(posedge axi_aclk);
+        axi_write_single(tb_mc_addr(3'd2, 14'd88, 10'd16), 4'h2, 64'hB0DF0000_00000002, 8'hFF);
+        repeat (2) @(posedge axi_aclk);
+        axi_write_single(tb_mc_addr(3'd2, 14'd88, 10'd24), 4'h3, 64'hB0DF0000_00000003, 8'hFF);
+        repeat (2) @(posedge axi_aclk);
+        axi_write_single(tb_mc_addr(3'd2, 14'd88, 10'd32), 4'h4, 64'hB0DF0000_00000004, 8'hFF);
+        repeat (2) @(posedge axi_aclk);
+        axi_write_single(tb_mc_addr(3'd2, 14'd88, 10'd40), 4'h5, 64'hB0DF0000_00000005, 8'hFF);
+        repeat (2) @(posedge axi_aclk);
+        axi_write_single(tb_mc_addr(3'd2, 14'd88, 10'd48), 4'h6, 64'hB0DF0000_00000006, 8'hFF);
+        repeat (2) @(posedge axi_aclk);
+        axi_write_single(tb_mc_addr(3'd2, 14'd88, 10'd56), 4'h7, 64'hB0DF0000_00000007, 8'hFF);
+        tb_wait_dfi_mc(2500);
+
+        axi_wait_b(4'h0);
+        repeat (6) @(posedge axi_aclk);
+        axi_wait_b(4'h1);
+        repeat (6) @(posedge axi_aclk);
+        axi_wait_b(4'h2);
+        repeat (6) @(posedge axi_aclk);
+        axi_wait_b(4'h3);
+        repeat (6) @(posedge axi_aclk);
+        axi_wait_b(4'h4);
+        repeat (6) @(posedge axi_aclk);
+        axi_wait_b(4'h5);
+        repeat (6) @(posedge axi_aclk);
+        axi_wait_b(4'h6);
+        repeat (6) @(posedge axi_aclk);
+        axi_wait_b(4'h7);
+
+        // --- Test 11: illegal INCR read with ARLEN != 0 -> SLVERR (no rreq / PHY queue entry) ---
+        s_axi_arid    = 4'h4;
+        s_axi_araddr  = tb_mc_addr(3'd3, 14'd50, 10'd0);
+        s_axi_arlen   = 8'd1;
+        s_axi_arburst = 2'b01;
+        s_axi_arsize  = AXI_SIZE_FULL;
+        s_axi_arvalid = 1'b1;
+        @(posedge axi_aclk);
+        while (!s_axi_arready)
+            @(posedge axi_aclk);
+        s_axi_arvalid = 1'b0;
+        s_axi_arlen   = 8'd0;
+        axi_wait_r_slverr(4'h4);
+
+        // --- Test 12: two outstanding reads with different ARID complete in MC FIFO order ---
+        tb_flush_axi_rsp;
+        s_axi_rready = 1'b0;
+        tb_clear_read_addr_q;
+        tb_read_model_rst = 1'b1;
+        repeat (12) @(posedge dfi_clk);
+        tb_read_model_rst = 1'b0;
+        repeat (10) @(posedge axi_aclk);
+
+        axi_read_single(tb_mc_addr(3'd1, 14'd10, 10'd0), 4'hA);
+        repeat (2) @(posedge axi_aclk);
+        axi_read_single(tb_mc_addr(3'd1, 14'd10, 10'd8), 4'hC);
+        tb_wait_dfi_mc(256);
+        axi_wait_r(4'hA, expected_rdata(tb_mc_addr(3'd1, 14'd10, 10'd0)));
+        repeat (6) @(posedge axi_aclk);
+        axi_wait_r(4'hC, expected_rdata(tb_mc_addr(3'd1, 14'd10, 10'd8)));
+
         repeat (20) @(posedge axi_aclk);
 
         if (errors == 0)
-            $display("PASS: tb_axi4_to_dfi_bridge (init_start pulse + init gating + SLVERR + read timeout + backpressure + MC checks)");
+            $display("PASS: tb_axi4_to_dfi_bridge (FIFO fill + SLVERR + read timeout + backpressure + MC checks)");
         else
             $display("FAIL: tb_axi4_to_dfi_bridge errors=%0d", errors);
         $finish;

@@ -156,6 +156,13 @@ Simulation uses **Icarus Verilog** (`iverilog -g2001`). The testbench **`src/tb_
 - Independent **`axi_aclk`** and **`dfi_clk`** generators.
 - A minimal PHY read-return model (**`TB_PHY_MC_CL`** should match DUT **`MC_CL`**) and scoreboard checks.
 - Optional **`+vcd`** for **gtkwave**.
+- Init gating (**`dfi_init_complete`**), **SLVERR** on illegal AW/W and illegal AR (wrong burst, wrong **`AWSIZE`/`ARSIZE`**, **`ARLEN` != 0** for reads), and **SLVERR** on read-data timeout (**`tb_phy_suppress_rddv`** withholds **`dfi_rddata_valid`**).
+- **B** and **R** channel backpressure (**`BVALID`/`RVALID`** stable while **`BREADY`/`RREADY`** low for several cycles).
+- **CDC FIFO depth (8):** eight reads issued with **`RREADY`** low until the MC has finished, then eight **R** beats drained in order; eight single-beat writes with **`BREADY`** low, then eight **B** beats drained in order. A **`tb_flush_axi_rsp`** task clears stray **R/B** beats before these blocks.
+- Two outstanding legal reads with different **`ARID`**; responses are checked in **MC / `rreq` FIFO** issue order.
+- SDRAM-style MC checks (**PRE/ACT/READ CAS/WRITE CAS** counts) for open-page hit, row miss, and cold bank.
+
+Between some **AR** issues and between back-to-back **R** (or **B**) drains, the testbench inserts a few **`axi_aclk`** waits so **Icarus** simulation stays consistent with the gray **async FIFO** first-word-fall-through read path across **CDC** (tight back-to-back handshakes can otherwise show a wrong ID or a repeated beat in this environment).
 
 Build and run: **`make -C test run`** (see repository **README.md**).
 
@@ -168,6 +175,7 @@ Build and run: **`make -C test run`** (see repository **README.md**).
 | 0.3 | DFI fidelity slice: `dfi_act_n` on ACT; `DFI_INIT_START_CYCLES` for optional `dfi_init_start` pulse. |
 | 0.4 | INCR write bursts up to `C_MAX_WRITE_AWLEN` (default four beats): one `wreq` FIFO entry per W beat (MSB = `WLAST`); one **B** after the last beat. |
 | 0.5 | Read data timeout reports **SLVERR**; `open_row_mem` reset covers all banks; PDF-friendly ASCII in this source. |
+| 0.6 | Verification section: extended testbench (FIFO fill under **RREADY**/**BREADY**, illegal **`ARLEN`**, dual **ARID** order, MC counters); note on **Icarus** + CDC FIFO handshake spacing. |
 
 # Document control
 

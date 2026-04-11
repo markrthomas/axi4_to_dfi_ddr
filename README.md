@@ -9,7 +9,7 @@ This repository is a practical starting point for simulation and integration; fu
 | Path | Description |
 |------|-------------|
 | `src/axi4_to_dfi_bridge.v` | Top bridge, `cdc_sync`, `async_fifo_gray`, and AXI4 slave → DFI command/data |
-| `src/tb_axi4_to_dfi_bridge.v` | Self-contained testbench, stimulus, and a minimal DFI read model |
+| `src/tb_axi4_to_dfi_bridge.v` | Self-contained testbench: dual clocks, PHY read model, **SLVERR** paths, **R/B** backpressure, **rresp**/**bresp** FIFO fill (depth 8), MC command counters (see **Design spec** section 8) |
 | `Makefile` | Repo root shortcuts: `run`, `clean`, `doc`, `doc-html`, etc. |
 | `test/Makefile` | Simulation: **iverilog**/**vvp**, VCD/**gtkwave**; also `doc` / `doc-html` wrappers |
 | `doc/DESIGN_SPEC.md` | Design specification (source for PDF/HTML) |
@@ -51,6 +51,8 @@ make -C test wave
 ```
 
 Generated simulation artifacts live under **`test/build/`** (ignored by git).
+
+The default **`make run`** test sequence is summarized in **`doc/DESIGN_SPEC.md`** (section **Verification**): init gating, illegal transactions and read-data timeout (**SLVERR**), **B**/**R** stall stability, filling the **gray async** response FIFOs while **RREADY**/**BREADY** are low, dual outstanding reads with different **ARID**, and DFI-side **PRE/ACT/CAS** checks. The bench spaces some **AXI** handshakes slightly for reliable **Icarus** + **CDC** behavior.
 
 ## Documentation (design spec)
 
