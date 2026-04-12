@@ -84,7 +84,7 @@ A **single-transaction** SDRAM-style **open-page** FSM drives `dfi_*` (one AXI-e
 2. Same open row: **CAS only**.
 3. Different open row: **PRE**, wait **MC_T_RP**, then **ACT**, wait **MC_T_RCD**, then **CAS**.
 
-**Timing (dfi_clk cycles):** `MC_T_RP`, `MC_T_RCD`, `MC_CL` (read CAS to read-data phase), `DFI_WRITE_ACK_CYCLES` (after WRITE CAS to B push), `MC_RD_DV_MAX` (valid wait after `MC_CL`).
+**Timing (dfi_clk cycles):** `MC_T_RP`, `MC_T_RCD`, `MC_CL` (read CAS to read-data phase), `DFI_WRITE_ACK_CYCLES` (after WRITE CAS to B push), `MC_RD_DV_MAX` (valid wait after `MC_CL`). A value of **0** for `MC_T_RP`, `MC_T_RCD`, `DFI_WRITE_ACK_CYCLES`, or `MC_CL` means **no** additional wait cycles in that phase (the FSM skips the wait state instead of decrementing a counter from zero).
 
 **Not in this block:** refresh, tRAS/tWR checks, DFI P0-P3 phasing.
 
@@ -149,6 +149,16 @@ Exact decode conditions are defined in **`src/axi4_to_dfi_bridge.v`** (combinati
 | `DFI_INIT_START_CYCLES` | MC init: pulse `dfi_init_start` high for this many `dfi_clk` cycles after reset release; **0** ties off. |
 | `C_MAX_WRITE_AWLEN` | Legal **INCR** write burst length: **`AWLEN`** must be no greater than this value (default **3** = four beats). **0** restricts writes to single-beat only. |
 
+## 7.1 Elaboration checks (RTL)
+
+At simulation/elaboration time, **`axi4_to_dfi_bridge`** and each **`async_fifo_gray`** instance validate parameters and **`$finish`** on violation:
+
+- **`C_AXI_DATA_WIDTH`** must equal **`DFI_DATA_WIDTH`**, and **`DFI_MASK_WIDTH`** must equal **`C_AXI_DATA_WIDTH/8`** (there is no width adapter in the datapath).
+- **`MC_COL_BITS + MC_ROW_BITS + DFI_BANK_WIDTH`** must not exceed **`C_AXI_ADDR_WIDTH`**; **`MC_COL_BITS`** and **`MC_ROW_BITS`** must be at least **1**; **`DFI_ADDR_WIDTH`** must cover **`MC_ROW_BITS`** and **`MC_COL_BITS`** on the command bus.
+- **`CDC_FIFO_DEPTH`** must be a power of two **>= 2** (same rule as **`async_fifo_gray` `DEPTH`**).
+- **`DFI_BANK_WIDTH`** must not exceed **24** (implementation limit on bank count).
+- **`C_AXI_ID_WIDTH`** must be **>= 1**; **`C_MAX_WRITE_AWLEN`** in **0..255**; timing integers **`MC_T_RP`**, **`MC_T_RCD`**, **`MC_CL`**, **`MC_RD_DV_MAX`**, **`DFI_WRITE_ACK_CYCLES`** must be **>= 0**.
+
 # 8. Verification
 
 Simulation uses **Icarus Verilog** (`iverilog -g2001`). The testbench **`src/tb_axi4_to_dfi_bridge.v`** provides:
@@ -176,6 +186,7 @@ Build and run: **`make -C test run`** (see repository **README.md**).
 | 0.4 | INCR write bursts up to `C_MAX_WRITE_AWLEN` (default four beats): one `wreq` FIFO entry per W beat (MSB = `WLAST`); one **B** after the last beat. |
 | 0.5 | Read data timeout reports **SLVERR**; `open_row_mem` reset covers all banks; PDF-friendly ASCII in this source. |
 | 0.6 | Verification section: extended testbench (FIFO fill under **RREADY**/**BREADY**, illegal **`ARLEN`**, dual **ARID** order, MC counters); note on **Icarus** + CDC FIFO handshake spacing. |
+| 0.7 | Elaboration-time parameter checks (data/mask widths, address map, CDC FIFO depth); explicit **0-cycle** handling for `MC_T_RP`, `MC_T_RCD`, `DFI_WRITE_ACK_CYCLES`, and `MC_CL`. |
 
 # Document control
 

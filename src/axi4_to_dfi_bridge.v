@@ -13,6 +13,8 @@
 //
 // Functional note: AXI4 handshaking, CDC, SLVERR for unsupported requests and
 //  read-data timeout (no dfi_rddata_valid within MC_RD_DV_MAX).
+// C_AXI_DATA_WIDTH must equal DFI_DATA_WIDTH and DFI_MASK_WIDTH must equal
+//  C_AXI_DATA_WIDTH/8 (checked at elaboration); no byte-lane adapter.
 // The dfi_clk domain includes an SDRAM-style open-page scheduler: per-bank
 // row tracking, PRE (wrong row or closed), ACT, then READ/WRITE CAS with
 // parameterized tRP, tRCD, and MC_CL. Refresh and multi-clock DFI phase buses
@@ -73,6 +75,21 @@ module async_fifo_gray #(
     endfunction
 
     localparam integer AW = $clog2(DEPTH);
+
+    initial begin
+        if (DEPTH < 2) begin
+            $display("ERROR: async_fifo_gray DEPTH=%0d must be >= 2", DEPTH);
+            $finish(1);
+        end
+        if ((DEPTH & (DEPTH - 1)) != 0) begin
+            $display("ERROR: async_fifo_gray DEPTH=%0d must be a power of two", DEPTH);
+            $finish(1);
+        end
+        if (WIDTH < 1) begin
+            $display("ERROR: async_fifo_gray WIDTH=%0d must be >= 1", WIDTH);
+            $finish(1);
+        end
+    end
 
     reg [WIDTH-1:0] mem [0:DEPTH-1];
 
@@ -428,6 +445,58 @@ module axi4_to_dfi_bridge #(
     //-------------------------------------------------------------------------
     localparam integer NBANKS = (1 << DFI_BANK_WIDTH);
 
+    initial begin
+        if (C_AXI_DATA_WIDTH != DFI_DATA_WIDTH) begin
+            $display("ERROR: axi4_to_dfi_bridge: C_AXI_DATA_WIDTH (%0d) must equal DFI_DATA_WIDTH (%0d) (no width adapter)",
+                     C_AXI_DATA_WIDTH, DFI_DATA_WIDTH);
+            $finish(1);
+        end
+        if ((C_AXI_DATA_WIDTH % 8) != 0) begin
+            $display("ERROR: axi4_to_dfi_bridge: C_AXI_DATA_WIDTH (%0d) must be a multiple of 8", C_AXI_DATA_WIDTH);
+            $finish(1);
+        end
+        if (DFI_MASK_WIDTH != (C_AXI_DATA_WIDTH / 8)) begin
+            $display("ERROR: axi4_to_dfi_bridge: DFI_MASK_WIDTH (%0d) must equal C_AXI_DATA_WIDTH/8 (%0d)",
+                     DFI_MASK_WIDTH, C_AXI_DATA_WIDTH / 8);
+            $finish(1);
+        end
+        if ((MC_COL_BITS + MC_ROW_BITS + DFI_BANK_WIDTH) > C_AXI_ADDR_WIDTH) begin
+            $display("ERROR: axi4_to_dfi_bridge: MC_COL_BITS+MC_ROW_BITS+DFI_BANK_WIDTH (%0d+%0d+%0d) exceeds C_AXI_ADDR_WIDTH (%0d)",
+                     MC_COL_BITS, MC_ROW_BITS, DFI_BANK_WIDTH, C_AXI_ADDR_WIDTH);
+            $finish(1);
+        end
+        if (MC_COL_BITS < 1 || MC_ROW_BITS < 1) begin
+            $display("ERROR: axi4_to_dfi_bridge: MC_COL_BITS and MC_ROW_BITS must be >= 1 (got %0d, %0d)",
+                     MC_COL_BITS, MC_ROW_BITS);
+            $finish(1);
+        end
+        if (DFI_ADDR_WIDTH < MC_ROW_BITS || DFI_ADDR_WIDTH < MC_COL_BITS) begin
+            $display("ERROR: axi4_to_dfi_bridge: DFI_ADDR_WIDTH (%0d) must be >= MC_ROW_BITS (%0d) and >= MC_COL_BITS (%0d)",
+                     DFI_ADDR_WIDTH, MC_ROW_BITS, MC_COL_BITS);
+            $finish(1);
+        end
+        if (CDC_FIFO_DEPTH < 2 || ((CDC_FIFO_DEPTH & (CDC_FIFO_DEPTH - 1)) != 0)) begin
+            $display("ERROR: axi4_to_dfi_bridge: CDC_FIFO_DEPTH (%0d) must be a power of two >= 2", CDC_FIFO_DEPTH);
+            $finish(1);
+        end
+        if (DFI_BANK_WIDTH > 24) begin
+            $display("ERROR: axi4_to_dfi_bridge: DFI_BANK_WIDTH (%0d) too large for implementation limits", DFI_BANK_WIDTH);
+            $finish(1);
+        end
+        if (C_AXI_ID_WIDTH < 1) begin
+            $display("ERROR: axi4_to_dfi_bridge: C_AXI_ID_WIDTH (%0d) must be >= 1", C_AXI_ID_WIDTH);
+            $finish(1);
+        end
+        if (MC_T_RP < 0 || MC_T_RCD < 0 || MC_CL < 0 || MC_RD_DV_MAX < 0 || DFI_WRITE_ACK_CYCLES < 0) begin
+            $display("ERROR: axi4_to_dfi_bridge: MC timing and DFI_WRITE_ACK_CYCLES must be >= 0");
+            $finish(1);
+        end
+        if (C_MAX_WRITE_AWLEN < 0 || C_MAX_WRITE_AWLEN > 255) begin
+            $display("ERROR: axi4_to_dfi_bridge: C_MAX_WRITE_AWLEN (%0d) must be in 0..255", C_MAX_WRITE_AWLEN);
+            $finish(1);
+        end
+    end
+
     localparam [3:0] ST_IDLE      = 4'd0;
     localparam [3:0] ST_PRE_CMD  = 4'd1;
     localparam [3:0] ST_WAIT_RP  = 4'd2;
@@ -737,8 +806,12 @@ module axi4_to_dfi_bridge #(
                     dfi_we_n    <= 1'b0;
                     dfi_cs_n    <= {DFI_CS_WIDTH{1'b0}};
                     row_open_mask[mc_bank] <= 1'b0;
-                    mc_ctr      <= MC_T_RP[7:0];
-                    mc_state    <= ST_WAIT_RP;
+                    if (MC_T_RP == 0)
+                        mc_state <= mc_after_rp;
+                    else begin
+                        mc_ctr   <= MC_T_RP[7:0];
+                        mc_state <= ST_WAIT_RP;
+                    end
                 end
                 ST_WAIT_RP: begin
                     if (mc_ctr == 8'd1)
@@ -754,8 +827,14 @@ module axi4_to_dfi_bridge #(
                     dfi_cas_n   <= 1'b1;
                     dfi_we_n    <= 1'b1;
                     dfi_cs_n    <= {DFI_CS_WIDTH{1'b0}};
-                    mc_ctr      <= MC_T_RCD[7:0];
-                    mc_state    <= ST_WAIT_RCD;
+                    if (MC_T_RCD == 0) begin
+                        row_open_mask[mc_bank] <= 1'b1;
+                        open_row_mem[mc_bank]    <= mc_row;
+                        mc_state                 <= mc_after_rcd;
+                    end else begin
+                        mc_ctr   <= MC_T_RCD[7:0];
+                        mc_state <= ST_WAIT_RCD;
+                    end
                 end
                 ST_WAIT_RCD: begin
                     if (mc_ctr == 8'd1) begin
@@ -775,8 +854,16 @@ module axi4_to_dfi_bridge #(
                     dfi_wrdata        <= mc_wdata;
                     dfi_wrdata_mask   <= ~mc_wstrb;
                     dfi_wrdata_en     <= 1'b1;
-                    mc_ctr            <= DFI_WRITE_ACK_CYCLES[7:0];
-                    mc_state          <= ST_WAIT_B;
+                    if (DFI_WRITE_ACK_CYCLES == 0) begin
+                        if (mc_wr_last_beat) begin
+                            if (!bresp_full)
+                                mc_state <= ST_IDLE;
+                        end else
+                            mc_state <= ST_IDLE;
+                    end else begin
+                        mc_ctr   <= DFI_WRITE_ACK_CYCLES[7:0];
+                        mc_state <= ST_WAIT_B;
+                    end
                 end
                 ST_WAIT_B: begin
                     if (mc_ctr == 8'd1) begin
@@ -798,8 +885,13 @@ module axi4_to_dfi_bridge #(
                     dfi_rddata_en <= 1'b1;
                     r_capture     <= {C_AXI_DATA_WIDTH{1'b0}};
                     mc_got_rddata <= 1'b0;
-                    mc_ctr        <= MC_CL[7:0];
-                    mc_state      <= ST_WAIT_CL;
+                    if (MC_CL == 0) begin
+                        mc_ctr   <= MC_RD_DV_MAX[7:0];
+                        mc_state <= ST_WAIT_DV;
+                    end else begin
+                        mc_ctr   <= MC_CL[7:0];
+                        mc_state <= ST_WAIT_CL;
+                    end
                 end
                 ST_WAIT_CL: begin
                     if (mc_ctr == 8'd1) begin
