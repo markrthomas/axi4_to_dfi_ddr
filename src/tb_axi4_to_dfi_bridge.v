@@ -34,6 +34,15 @@ module tb;
     integer errors;
     integer tb_qi;
     integer tb_init_start_hi;
+    integer tb_rng_state;
+    integer tb_rs_op;
+    integer tb_rs_gap;
+    integer tb_rs_bank;
+    integer tb_rs_row;
+    integer tb_rs_col;
+    integer tb_rs_pr;
+    reg [C_AXI_ADDR_WIDTH-1:0] tb_rs_raddr [0:15];
+    reg [C_AXI_ID_WIDTH-1:0]   tb_rs_rid   [0:15];
 
     // Asynchronous clocks (CDC path in DUT)
     reg axi_aclk;
@@ -663,6 +672,15 @@ module tb;
         end
     endtask
 
+    // Deterministic xorshift32 (portable; no $dist); used for stress gaps/paths
+    task tb_rng_step;
+        begin
+            tb_rng_state = tb_rng_state ^ (tb_rng_state << 13);
+            tb_rng_state = tb_rng_state ^ (tb_rng_state >> 17);
+            tb_rng_state = tb_rng_state ^ (tb_rng_state << 5);
+        end
+    endtask
+
     task axi_wait_r_stall;
         input [C_AXI_ID_WIDTH-1:0]     exp_id;
         input [C_AXI_DATA_WIDTH-1:0]   exp_data;
@@ -716,6 +734,7 @@ module tb;
 
     initial begin
         errors = 0;
+        tb_rng_state = 32'hACE1_0426;
         mon_en = 1'b0;
         tb_read_addr_wr_ptr = 0;
         axi_aresetn = 1'b0;
@@ -1020,10 +1039,65 @@ module tb;
         repeat (6) @(posedge axi_aclk);
         axi_wait_r(4'hC, expected_rdata(tb_mc_addr(3'd1, 14'd10, 10'd8)));
 
+        // --- Test 13: LFSR stress (writes and reads in separate phases).
+        //     DUT gives wreq priority over rreq (reads only start when wreq is empty),
+        //     so interleaved AR/AW would not preserve AR-order == R-order vs scoreboard.
+        tb_flush_axi_rsp;
+        s_axi_arvalid = 1'b0;
+
+        for (tb_rs_op = 0; tb_rs_op < 28; tb_rs_op = tb_rs_op + 1) begin
+            tb_rng_step;
+            tb_rs_gap = tb_rng_state & 32'h7;
+            if (tb_rs_gap > 5)
+                tb_rs_gap = 5;
+            repeat (tb_rs_gap) @(posedge axi_aclk);
+            tb_rng_step;
+            tb_rs_bank = (tb_rng_state >> 9) & 7;
+            tb_rs_row  = 14'd96 + ((tb_rs_op * 3) % 40);
+            tb_rs_col  = ((tb_rs_op * 17) % 1024) & 10'h3f8;
+            axi_write_single(
+                tb_mc_addr(tb_rs_bank[2:0], tb_rs_row[13:0], tb_rs_col[9:0]),
+                tb_rs_op[3:0],
+                {tb_rng_state, tb_rng_state ^ 32'h12345678},
+                8'hFF);
+            axi_wait_b(tb_rs_op[3:0]);
+        end
+
+        tb_wait_dfi_mc(256);
+        repeat (24) @(posedge axi_aclk);
+
+        tb_clear_read_addr_q;
+        tb_read_model_rst = 1'b1;
+        repeat (12) @(posedge dfi_clk);
+        tb_read_model_rst = 1'b0;
+        repeat (10) @(posedge axi_aclk);
+
+        tb_rs_pr = 0;
+        for (tb_rs_op = 0; tb_rs_op < 8; tb_rs_op = tb_rs_op + 1) begin
+            tb_rng_step;
+            tb_rs_gap = 1 + (tb_rng_state & 32'h3);
+            repeat (tb_rs_gap) @(posedge axi_aclk);
+            tb_rng_step;
+            tb_rs_bank = (tb_rng_state >> 8) & 7;
+            tb_rs_row  = 14'd32 + ((tb_rs_op * 7) % 56);
+            tb_rs_col  = ((tb_rs_op * 23) % 1024) & 10'h3f8;
+            tb_rs_raddr[tb_rs_pr] = tb_mc_addr(tb_rs_bank[2:0], tb_rs_row[13:0], tb_rs_col[9:0]);
+            axi_read_single(tb_rs_raddr[tb_rs_pr], tb_rs_pr[3:0]);
+            tb_rs_rid[tb_rs_pr] = tb_rs_pr[3:0];
+            tb_rs_pr = tb_rs_pr + 1;
+            repeat (2) @(posedge axi_aclk);
+        end
+
+        tb_wait_dfi_mc(2500);
+        for (tb_rs_op = 0; tb_rs_op < tb_rs_pr; tb_rs_op = tb_rs_op + 1) begin
+            axi_wait_r(tb_rs_rid[tb_rs_op], expected_rdata(tb_rs_raddr[tb_rs_op]));
+            repeat (6) @(posedge axi_aclk);
+        end
+
         repeat (20) @(posedge axi_aclk);
 
         if (errors == 0)
-            $display("PASS: tb_axi4_to_dfi_bridge (FIFO fill + SLVERR + read timeout + backpressure + MC checks)");
+            $display("PASS: tb_axi4_to_dfi_bridge (FIFO + SLVERR + timeout + stress + MC checks)");
         else
             $display("FAIL: tb_axi4_to_dfi_bridge errors=%0d", errors);
         $finish;

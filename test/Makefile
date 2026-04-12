@@ -7,6 +7,9 @@
 #   build   Compile only (outputs build/sim.vvp)
 #   run     Build if needed, run simulation (default for `all`)
 #   test    Same as run
+#   run-smoke  Compile tb_param_smoke (CDC_FIFO_DEPTH=16) and run
+#   lint-verilator  Verilator --lint-only on bridge RTL (optional tool)
+#   ci      run + run-smoke + lint-verilator (for automation)
 #   vcd     Run with +vcd; writes build/sim.vcd for gtkwave
 #   wave    Run vcd then launch gtkwave on build/sim.vcd (if gtkwave in PATH)
 #   clean   Remove build/
@@ -20,19 +23,28 @@ BUILD_DIR := build
 SIM       := $(BUILD_DIR)/sim.vvp
 VCD       := $(BUILD_DIR)/sim.vcd
 SOURCES   := $(SRC_DIR)/axi4_to_dfi_bridge.v $(SRC_DIR)/tb_axi4_to_dfi_bridge.v
+SMOKE_TOP := tb_param_smoke
+SMOKE_SIM := $(BUILD_DIR)/smoke.vvp
+SMOKE_SRC := $(SRC_DIR)/axi4_to_dfi_bridge.v $(SRC_DIR)/tb_param_smoke.v
 
 IVERILOG  := iverilog
 VVP       := vvp
 IVERFLAGS := -g2001 -Wall
+VERILATOR := verilator
+# Lint-only: waive width/unused on this Verilog-2001 bridge (AXI tie-offs, FIFO PTRW ternary).
+VERILINT  := $(VERILATOR) --lint-only -Wall -Wno-DECLFILENAME -Wno-WIDTH -Wno-UNUSED
 
-.PHONY: all build run test vcd wave clean help doc doc-html
+.PHONY: all build run test run-smoke lint-verilator ci vcd wave clean help doc doc-html
 
 all: run
 
 help:
-	@echo "Targets: build  run  test  vcd  wave  doc  doc-html  clean  help"
+	@echo "Targets: build  run  test  run-smoke  lint-verilator  ci  vcd  wave  doc  doc-html  clean  help"
 	@echo "  build  - compile to $(SIM)"
 	@echo "  run    - compile (if needed) and run tests"
+	@echo "  run-smoke - compile $(SMOKE_SIM) and run tb_param_smoke"
+	@echo "  lint-verilator - Verilator lint on $(SRC_DIR)/axi4_to_dfi_bridge.v (skip if no verilator)"
+	@echo "  ci     - run + run-smoke + lint-verilator"
 	@echo "  vcd    - run tests and write $(VCD) (open with gtkwave)"
 	@echo "  wave   - vcd + gtkwave $(VCD)"
 	@echo "  doc    - PDF from $(DOC_DIR)/DESIGN_SPEC.md (requires pandoc + pdflatex)"
@@ -49,6 +61,19 @@ run: $(SIM)
 	$(VVP) $(SIM)
 
 test: run
+
+$(SMOKE_SIM): $(SMOKE_SRC)
+	mkdir -p $(dir $@)
+	$(IVERILOG) $(IVERFLAGS) -o $@ -s $(SMOKE_TOP) $(SMOKE_SRC)
+
+run-smoke: $(SMOKE_SIM)
+	$(VVP) $(SMOKE_SIM)
+
+lint-verilator:
+	@if ! command -v $(VERILATOR) >/dev/null 2>&1; then echo "SKIP: verilator not in PATH"; exit 0; fi
+	$(VERILINT) $(SRC_DIR)/axi4_to_dfi_bridge.v
+
+ci: run run-smoke lint-verilator
 
 vcd: $(SIM)
 	$(VVP) $(SIM) +vcd

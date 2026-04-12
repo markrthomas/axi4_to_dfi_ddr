@@ -171,10 +171,15 @@ Simulation uses **Icarus Verilog** (`iverilog -g2001`). The testbench **`src/tb_
 - **CDC FIFO depth (8):** eight reads issued with **`RREADY`** low until the MC has finished, then eight **R** beats drained in order; eight single-beat writes with **`BREADY`** low, then eight **B** beats drained in order. A **`tb_flush_axi_rsp`** task clears stray **R/B** beats before these blocks.
 - Two outstanding legal reads with different **`ARID`**; responses are checked in **MC / `rreq` FIFO** issue order.
 - SDRAM-style MC checks (**PRE/ACT/READ CAS/WRITE CAS** counts) for open-page hit, row miss, and cold bank.
+- **Stress (Test 13):** xorshift32 **LFSR** drives gaps and bank/row/column choices. **Writes** (each followed by **B**) run first, then **reads** are issued only while the **`wreq`** FIFO is empty so **MC** order matches **`rreq`** issue order (the scheduler does not pop **`rreq`** until **`wreq`** is empty). **AR** spacing and **R** drains mirror the FIFO-fill test (**Icarus** + FWFT).
 
 Between some **AR** issues and between back-to-back **R** (or **B**) drains, the testbench inserts a few **`axi_aclk`** waits so **Icarus** simulation stays consistent with the gray **async FIFO** first-word-fall-through read path across **CDC** (tight back-to-back handshakes can otherwise show a wrong ID or a repeated beat in this environment).
 
-Build and run: **`make -C test run`** (see repository **README.md**).
+**CI:** **`make -C test ci`** runs the main testbench, **`tb_param_smoke`** (**`CDC_FIFO_DEPTH=16`**), and **Verilator** `--lint-only` on **`axi4_to_dfi_bridge.v`** (see **`.github/workflows/ci.yml`**).
+
+**Further hardening:** For stronger CDC ordering evidence than **Icarus** alone, re-verify **`async_fifo_gray`** with a second simulator, bounded formal, or a registered read path before increasing protocol complexity on top of this FIFO.
+
+Build and run: **`make -C test run`**; full automation: **`make -C test ci`** (see repository **README.md**).
 
 # 9. Revision history
 
@@ -187,6 +192,7 @@ Build and run: **`make -C test run`** (see repository **README.md**).
 | 0.5 | Read data timeout reports **SLVERR**; `open_row_mem` reset covers all banks; PDF-friendly ASCII in this source. |
 | 0.6 | Verification section: extended testbench (FIFO fill under **RREADY**/**BREADY**, illegal **`ARLEN`**, dual **ARID** order, MC counters); note on **Icarus** + CDC FIFO handshake spacing. |
 | 0.7 | Elaboration-time parameter checks (data/mask widths, address map, CDC FIFO depth); explicit **0-cycle** handling for `MC_T_RP`, `MC_T_RCD`, `DFI_WRITE_ACK_CYCLES`, and `MC_CL`. |
+| 0.8 | LFSR stress phase (writes then reads); **`tb_param_smoke`**; **`make ci`** (**iverilog** + **verilator** lint); GitHub Actions workflow. |
 
 # Document control
 
