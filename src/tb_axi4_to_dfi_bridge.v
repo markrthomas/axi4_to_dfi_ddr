@@ -918,7 +918,7 @@ module tb;
         repeat (10) @(posedge axi_aclk);
 
         // Unrolled. Space AR issues and R/B drains on axi_aclk: back-to-back handshakes
-        // plus FWFT async_fifo read can mis-order or repeat visible beats in iverilog sim.
+        // plus async_fifo read NBAs vs channel assigns can mis-order beats in iverilog.
         axi_read_single(tb_mc_addr(3'd6, 14'd200, 10'd0), 4'h0);
         repeat (2) @(posedge axi_aclk);
         axi_read_single(tb_mc_addr(3'd6, 14'd200, 10'd8), 4'h1);
