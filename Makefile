@@ -3,13 +3,14 @@
 # Simulation details: test/Makefile
 # Documentation details: doc/Makefile
 
-.PHONY: help clean run test build vcd wave doc doc-html ci
+.PHONY: help clean run test build vcd wave doc doc-html ci audit
 
 help:
 	@echo "axi4_to_dfi_ddr (repo root)"
 	@echo "  make run       - compile (if needed) and run simulation"
 	@echo "  make test      - same as run"
 	@echo "  make ci        - sims + param smokes + elab-fail guards + Verilator lint (see test/Makefile)"
+	@echo "  make audit     - make ci then build design PDF (pandoc + pdflatex)"
 	@echo "  make build     - compile simulation only (test/build/sim.vvp)"
 	@echo "  make vcd       - run simulation with +vcd (test/build/sim.vcd)"
 	@echo "  make wave      - vcd + gtkwave"
@@ -27,6 +28,9 @@ run test:
 
 ci:
 	$(MAKE) -C test ci
+
+audit: ci
+	$(MAKE) -C doc pdf
 
 build:
 	$(MAKE) -C test build
