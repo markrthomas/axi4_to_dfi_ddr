@@ -854,16 +854,9 @@ module axi4_to_dfi_bridge #(
                     dfi_wrdata        <= mc_wdata;
                     dfi_wrdata_mask   <= ~mc_wstrb;
                     dfi_wrdata_en     <= 1'b1;
-                    if (DFI_WRITE_ACK_CYCLES == 0) begin
-                        if (mc_wr_last_beat) begin
-                            if (!bresp_full)
-                                mc_state <= ST_IDLE;
-                        end else
-                            mc_state <= ST_IDLE;
-                    end else begin
-                        mc_ctr   <= DFI_WRITE_ACK_CYCLES[7:0];
-                        mc_state <= ST_WAIT_B;
-                    end
+                    // bresp_wr_en is (ST_WAIT_B && mc_ctr==1); always enter WAIT_B, ctr=1 when no ack delay
+                    mc_ctr   <= (DFI_WRITE_ACK_CYCLES == 0) ? 8'd1 : DFI_WRITE_ACK_CYCLES[7:0];
+                    mc_state <= ST_WAIT_B;
                 end
                 ST_WAIT_B: begin
                     if (mc_ctr == 8'd1) begin

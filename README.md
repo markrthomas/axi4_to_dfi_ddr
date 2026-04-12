@@ -11,6 +11,8 @@ This repository is a practical starting point for simulation and integration; fu
 | `src/axi4_to_dfi_bridge.v` | Top bridge, `cdc_sync`, `async_fifo_gray`, and AXI4 slave → DFI command/data |
 | `src/tb_axi4_to_dfi_bridge.v` | Self-contained testbench: dual clocks, PHY read model, **SLVERR** paths, **R/B** backpressure, **rresp**/**bresp** FIFO fill (depth 8), MC command counters, LFSR stress (see **Design spec** section 8) |
 | `src/tb_param_smoke.v` | Minimal second top: **`CDC_FIFO_DEPTH=16`**, **`DFI_INIT_START_CYCLES=0`**; one write and one read (**`make -C test run-smoke`**) |
+| `src/tb_param_smoke_zcycles.v` | Smoke with **`MC_T_RP`/`MC_T_RCD`/`MC_CL`/`DFI_WRITE_ACK_CYCLES` = 0**; cold write/read + row-miss write/read (**`make -C test run-smoke-zc`**) |
+| `src/tb_elab_fail.v` | Four tiny tops used by **`elab-fail-*`** to assert parameter guards print **`ERROR:`** |
 | `Makefile` | Repo root shortcuts: `run`, `ci`, `clean`, `doc`, `doc-html`, etc. |
 | `test/Makefile` | Simulation: **iverilog**/**vvp**, **`run-smoke`**, **`lint-verilator`**, **`ci`**; VCD/**gtkwave**; `doc` / `doc-html` wrappers |
 | `.github/workflows/ci.yml` | **GitHub Actions**: **`make -C test ci`** on **main** |
@@ -50,8 +52,10 @@ make -C test help
 make -C test build
 make -C test run      # default if you run: make -C test
 make -C test run-smoke   # alternate depth: tb_param_smoke (CDC_FIFO_DEPTH=16)
+make -C test run-smoke-zc   # zero-cycle MC timing smoke
+make -C test elab-fail-all  # illegal parameters must fail with ERROR:
 make -C test lint-verilator  # optional; skips if verilator not installed
-make -C test ci       # run + run-smoke + lint-verilator
+make -C test ci       # run + both smokes + elab-fail-all + lint-verilator
 make -C test vcd
 make -C test wave
 ```

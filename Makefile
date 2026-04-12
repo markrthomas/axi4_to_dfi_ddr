@@ -9,7 +9,7 @@ help:
 	@echo "axi4_to_dfi_ddr (repo root)"
 	@echo "  make run       - compile (if needed) and run simulation"
 	@echo "  make test      - same as run"
-	@echo "  make ci        - main TB + param smoke + Verilator lint (see test/Makefile)"
+	@echo "  make ci        - sims + param smokes + elab-fail guards + Verilator lint (see test/Makefile)"
 	@echo "  make build     - compile simulation only (test/build/sim.vvp)"
 	@echo "  make vcd       - run simulation with +vcd (test/build/sim.vcd)"
 	@echo "  make wave      - vcd + gtkwave"

@@ -84,7 +84,7 @@ A **single-transaction** SDRAM-style **open-page** FSM drives `dfi_*` (one AXI-e
 2. Same open row: **CAS only**.
 3. Different open row: **PRE**, wait **MC_T_RP**, then **ACT**, wait **MC_T_RCD**, then **CAS**.
 
-**Timing (dfi_clk cycles):** `MC_T_RP`, `MC_T_RCD`, `MC_CL` (read CAS to read-data phase), `DFI_WRITE_ACK_CYCLES` (after WRITE CAS to B push), `MC_RD_DV_MAX` (valid wait after `MC_CL`). A value of **0** for `MC_T_RP`, `MC_T_RCD`, `DFI_WRITE_ACK_CYCLES`, or `MC_CL` means **no** additional wait cycles in that phase (the FSM skips the wait state instead of decrementing a counter from zero).
+**Timing (dfi_clk cycles):** `MC_T_RP`, `MC_T_RCD`, `MC_CL` (read CAS to read-data phase), `DFI_WRITE_ACK_CYCLES` (after WRITE CAS before **B** is pushed into `u_fifo_bresp`), `MC_RD_DV_MAX` (valid wait after `MC_CL`). A value of **0** for `MC_T_RP`, `MC_T_RCD`, or `MC_CL` skips the corresponding wait state (no counter underflow). **`DFI_WRITE_ACK_CYCLES = 0`** means **no** extra turnaround cycles after WRITE CAS; the FSM still spends **one** `dfi_clk` in **`ST_WAIT_B`** with **`mc_ctr == 1`** so **`bresp_wr_en`** can fire (combinational **B** push requires that state).
 
 **Not in this block:** refresh, tRAS/tWR checks, DFI P0-P3 phasing.
 
@@ -97,7 +97,7 @@ A **single-transaction** SDRAM-style **open-page** FSM drives `dfi_*` (one AXI-e
    - **INCR burst (writes only)**: parameter **`C_MAX_WRITE_AWLEN`** (default **3**) allows `AWLEN` in **0...C_MAX_WRITE_AWLEN** (up to **four** beats for the default). **`WLAST`** must be low on all beats except the last; the last beat's index must equal **`AWLEN`**. After each non-final beat, the held **`AWADDR`** is advanced by **`C_AXI_DATA_WIDTH/8`** for the next FIFO entry.
 2. **Pack format** (`WREQ_W` bits): **MSB** = **`WLAST`** for that beat; then `AWID`, `AWADDR`, `WDATA`, `WSTRB`.
 3. **DFI**: The memory-controller FSM (section 3.5) may issue **PRE/ACT** before each **WRITE** CAS; `dfi_wrdata` / `dfi_wrdata_mask` / `dfi_wrdata_en` align with each WRITE CAS cycle.
-4. **Response**: After each WRITE CAS, the FSM waits **`DFI_WRITE_ACK_CYCLES`** on `dfi_clk`. Only when that beat's stored **`WLAST`** is **1** does the bridge push **`AWID`** into **`u_fifo_bresp`** (one **B** for the whole burst). The AXI domain pops this FIFO to assert **`BVALID`** with **`BRESP = OKAY`**.
+4. **Response**: After each WRITE CAS, the FSM enters **`ST_WAIT_B`** for **`max(1, DFI_WRITE_ACK_CYCLES)`** `dfi_clk` cycles (so **`DFI_WRITE_ACK_CYCLES = 0`** is one cycle in **`ST_WAIT_B`**). When **`mc_ctr`** reaches **1** and that beat's stored **`WLAST`** is **1**, the bridge pushes **`AWID`** into **`u_fifo_bresp`** (one **B** for the whole burst). The AXI domain pops this FIFO to assert **`BVALID`** with **`BRESP = OKAY`**.
 
 AW/W **holding registers** allow address and data to arrive in separate cycles before a matching pair is pushed; beat counting for **`WLAST`** checks treats a same-cycle **`AWVALID`/`AWREADY`** handshake as starting the burst at beat **0** even if the running beat counter register is non-zero from an earlier transaction.
 
@@ -175,7 +175,7 @@ Simulation uses **Icarus Verilog** (`iverilog -g2001`). The testbench **`src/tb_
 
 Between some **AR** issues and between back-to-back **R** (or **B**) drains, the testbench inserts a few **`axi_aclk`** waits so **Icarus** simulation stays consistent with the gray **async FIFO** first-word-fall-through read path across **CDC** (tight back-to-back handshakes can otherwise show a wrong ID or a repeated beat in this environment).
 
-**CI:** **`make -C test ci`** runs the main testbench, **`tb_param_smoke`** (**`CDC_FIFO_DEPTH=16`**), and **Verilator** `--lint-only` on **`axi4_to_dfi_bridge.v`** (see **`.github/workflows/ci.yml`**).
+**CI:** **`make -C test ci`** runs the main testbench, **`tb_param_smoke`**, **`tb_param_smoke_zcycles`** ( **`MC_T_RP`/`MC_T_RCD`/`MC_CL`/`DFI_WRITE_ACK_CYCLES` all **0** ), **elaboration-fail** checks (illegal parameters must print **`ERROR:`** and **`$finish`**), and **Verilator** `--lint-only` on **`axi4_to_dfi_bridge.v`** (see **`.github/workflows/ci.yml`**).
 
 **Further hardening:** For stronger CDC ordering evidence than **Icarus** alone, re-verify **`async_fifo_gray`** with a second simulator, bounded formal, or a registered read path before increasing protocol complexity on top of this FIFO.
 
@@ -193,6 +193,7 @@ Build and run: **`make -C test run`**; full automation: **`make -C test ci`** (s
 | 0.6 | Verification section: extended testbench (FIFO fill under **RREADY**/**BREADY**, illegal **`ARLEN`**, dual **ARID** order, MC counters); note on **Icarus** + CDC FIFO handshake spacing. |
 | 0.7 | Elaboration-time parameter checks (data/mask widths, address map, CDC FIFO depth); explicit **0-cycle** handling for `MC_T_RP`, `MC_T_RCD`, `DFI_WRITE_ACK_CYCLES`, and `MC_CL`. |
 | 0.8 | LFSR stress phase (writes then reads); **`tb_param_smoke`**; **`make ci`** (**iverilog** + **verilator** lint); GitHub Actions workflow. |
+| 0.9 | **`tb_param_smoke_zcycles`**; **`tb_elab_fail`** + Makefile **`elab-fail-*`**; **`DFI_WRITE_ACK_CYCLES=0`** uses one **`ST_WAIT_B`** cycle so **B** is pushed. |
 
 # Document control
 
