@@ -1,0 +1,21 @@
+# Yosys-only bounded safety proof for async_fifo_gray (single-clock wrapper).
+# Run from this directory:  yosys -q -s yosys_fifo_safety.ys
+#
+# Requires Yosys with formal assert support (sat -prove-asserts). Uses async2sync
+# so async-reset flops become BMC-friendly.
+
+read_verilog -sv fifo_safety_top.sv
+read_verilog ../src/axi4_to_dfi_bridge.v
+hierarchy -top fifo_safety_top
+
+proc
+opt
+memory_map
+opt
+
+prep -top fifo_safety_top
+async2sync
+flatten
+opt
+
+sat -seq 45 -prove-asserts -verify -timeout 120

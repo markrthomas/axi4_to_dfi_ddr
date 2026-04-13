@@ -3,13 +3,13 @@
 # Simulation details: test/Makefile
 # Documentation details: doc/Makefile
 
-.PHONY: help clean run test build vcd wave doc doc-html ci audit syn-check
+.PHONY: help clean run test build vcd wave doc doc-html ci audit syn-check formal-fifo
 
 help:
 	@echo "axi4_to_dfi_ddr (repo root)"
 	@echo "  make run       - compile (if needed) and run simulation"
 	@echo "  make test      - same as run"
-	@echo "  make ci        - sims + param smokes (incl. refresh) + elab-fail + Verilator + optional Yosys"
+	@echo "  make ci        - sims + smokes + elab-fail + Verilator + yosys syn + yosys formal-fifo (if yosys)"
 	@echo "  make audit     - make ci then build design PDF (pandoc + pdflatex)"
 	@echo "  make build     - compile simulation only (test/build/sim.vvp)"
 	@echo "  make vcd       - run simulation with +vcd (test/build/sim.vcd)"
@@ -17,7 +17,8 @@ help:
 	@echo "  make doc       - design PDF (doc/build/design_spec.pdf)"
 	@echo "  make doc-html  - design HTML (doc/build/design_spec.html)"
 	@echo "  make clean     - remove test/build/ and doc/build/"
-	@echo "  make syn-check - Yosys elaboration on syn/yosys.ys (skip if yosys missing)"
+	@echo "  make syn-check   - Yosys elaboration on syn/yosys.ys (skip if yosys missing)"
+	@echo "  make formal-fifo - Yosys BMC on formal/fifo_safety_top.sv (skip if yosys missing)"
 	@echo "See README.md for full instructions and per-directory make -C usage."
 
 clean:
@@ -32,6 +33,9 @@ ci:
 
 syn-check:
 	$(MAKE) -C test syn-check
+
+formal-fifo:
+	$(MAKE) -C test formal-fifo
 
 audit: ci
 	$(MAKE) -C doc pdf

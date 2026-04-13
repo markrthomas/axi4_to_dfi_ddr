@@ -178,9 +178,11 @@ Simulation uses **Icarus Verilog** (`iverilog -g2001`). The testbench **`src/tb_
 
 **`tb_param_smoke_refresh`** enables **`MC_REFRESH_INTERVAL` > 0** on the DUT: a single cold write opens one bank, then after idle gaps the refresh walk issues exactly one **PRE** (monitored on **`dfi_clk`**); a second interval with all banks closed must not add further **PRE** pulses.
 
+**`make formal-fifo`** (optional): **Yosys** bounded **`sat -prove-asserts`** on **`formal/fifo_safety_top.sv`**, a single-clock instance of **`async_fifo_gray`** with phased reset and host **`assume`** on **`full`**/**`empty`** (see **`formal/README.md`**). This is **not** a substitute for CDC signoff on unrelated clock ratios.
+
 Between some **AR** issues and between back-to-back **R** (or **B**) drains, the testbench inserts a few **`axi_aclk`** waits so **Icarus** simulation stays consistent with the gray **async FIFO** first-word-fall-through read path across **CDC** (tight back-to-back handshakes can otherwise show a wrong ID or a repeated beat in this environment).
 
-**CI:** **`make -C test ci`** runs the main testbench, **`tb_param_smoke`**, **`tb_param_smoke_zcycles`** ( **`MC_T_RP`/`MC_T_RCD`/`MC_CL`/`DFI_WRITE_ACK_CYCLES` all **0** ), **`tb_param_smoke_refresh`** (**`MC_REFRESH_INTERVAL` > 0**, **PRE** on refresh walk), **elaboration-fail** checks (illegal parameters must print **`ERROR:`** and **`$finish`**), **Verilator** `--lint-only` on **`axi4_to_dfi_bridge.v`**, and **`syn-check`** (**Yosys** on **`syn/yosys.ys`**, skipped if **`yosys`** is not installed; see **`.github/workflows/ci.yml`**).
+**CI:** **`make -C test ci`** runs the main testbench, **`tb_param_smoke`**, **`tb_param_smoke_zcycles`** ( **`MC_T_RP`/`MC_T_RCD`/`MC_CL`/`DFI_WRITE_ACK_CYCLES` all **0** ), **`tb_param_smoke_refresh`** (**`MC_REFRESH_INTERVAL` > 0**, **PRE** on refresh walk), **elaboration-fail** checks (illegal parameters must print **`ERROR:`** and **`$finish`**), **Verilator** `--lint-only` on **`axi4_to_dfi_bridge.v`**, **`syn-check`** (**Yosys** on **`syn/yosys.ys`**), and **`formal-fifo`** (**Yosys** bounded BMC on **`formal/fifo_safety_top.sv`**); the Yosys targets are skipped if **`yosys`** is not installed (see **`.github/workflows/ci.yml`**).
 
 **Further hardening:** For stronger CDC ordering evidence than **Icarus** alone, re-verify **`async_fifo_gray`** with a second simulator, bounded formal, or a **registered read data path** designed together with **`rd_empty`** and the bridge’s **`wreq_snapshot` / `rreq_snapshot`** timing (a naive registered mux alone can deadlock or mis-`empty` without that co-design). See **README** roadmap for the ordered backlog.
 
@@ -201,6 +203,7 @@ Build and run: **`make -C test run`**; full automation: **`make -C test ci`** (s
 | 0.9 | **`tb_param_smoke_zcycles`**; **`tb_elab_fail`** + Makefile **`elab-fail-*`**; **`DFI_WRITE_ACK_CYCLES=0`** uses one **`ST_WAIT_B`** cycle so **B** is pushed. |
 | 0.10 | README roadmap update (FIFO + formal + refresh ordering); **`make audit`** (**`ci`** + design PDF). |
 | 0.11 | Optional **`MC_REFRESH_INTERVAL`** refresh walk (all-bank **PRE** when due); **`syn-check`** in **`make ci`**; **`formal/README.md`** template; **`syn/constraints.sdc`** SDC hints; **`tb_param_smoke_refresh`**. |
+| 0.12 | **Yosys-only** bounded formal on **`async_fifo_gray`** via **`formal/fifo_safety_top.sv`** and **`make formal-fifo`**. |
 
 # Document control
 

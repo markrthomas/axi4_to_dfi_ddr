@@ -21,7 +21,8 @@ This repository is a practical starting point for simulation and integration. Th
 | `doc/Makefile` | `pdf`, `html`, `clean` (outputs under `doc/build/`) |
 | `syn/yosys.ys` | Optional **Yosys** elaboration/synthesis sanity script for the bridge top |
 | `syn/constraints.sdc` | Commented **SDC** hints (CDC false paths); not read by Yosys script |
-| `formal/README.md` | Pointers for optional SymbiYosys / bounded checks (FIFO first) |
+| `formal/README.md` | **Yosys-only** FIFO BMC (`formal-fifo`); notes on optional SymbiYosys later |
+| `formal/yosys_fifo_safety.ys` | Yosys script: bounded **`sat -prove-asserts`** on **`fifo_safety_top.sv`** |
 | `LICENSE` | MIT |
 
 ## Requirements

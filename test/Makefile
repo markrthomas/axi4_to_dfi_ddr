@@ -13,7 +13,8 @@
 #   elab-fail-*  Expect ERROR: from parameter guards (see tb_elab_fail.v)
 #   lint-verilator  Verilator --lint-only on bridge RTL (optional tool)
 #   syn-check  Yosys hierarchy/opt on ../syn/yosys.ys (skip if yosys not in PATH)
-#   ci      run + smoke + smoke-zc + smoke-refresh + elab-fail-all + lint-verilator + syn-check
+#   formal-fifo  Yosys BMC on formal/fifo_safety_top.sv (skip if yosys not in PATH)
+#   ci      ... + syn-check + formal-fifo
 #   vcd     Run with +vcd; writes build/sim.vcd for gtkwave
 #   wave    Run vcd then launch gtkwave on build/sim.vcd (if gtkwave in PATH)
 #   clean   Remove build/
@@ -47,12 +48,12 @@ VERILINT  := $(VERILATOR) --lint-only -Wall -Wno-DECLFILENAME -Wno-WIDTH -Wno-UN
 
 .PHONY: all build run test run-smoke run-smoke-zc run-smoke-refresh \
 	elab-fail-width elab-fail-depth elab-fail-addrmap elab-fail-fifo elab-fail-all \
-	lint-verilator syn-check ci vcd wave clean help doc doc-html
+	lint-verilator syn-check formal-fifo ci vcd wave clean help doc doc-html
 
 all: run
 
 help:
-	@echo "Targets: build run test run-smoke run-smoke-zc run-smoke-refresh elab-fail-* elab-fail-all lint-verilator syn-check ci vcd wave doc doc-html clean help"
+	@echo "Targets: build run test run-smoke run-smoke-zc run-smoke-refresh elab-fail-* elab-fail-all lint-verilator syn-check formal-fifo ci vcd wave doc doc-html clean help"
 	@echo "  build  - compile to $(SIM)"
 	@echo "  run    - compile (if needed) and run tests"
 	@echo "  run-smoke - compile $(SMOKE_SIM) and run tb_param_smoke"
@@ -61,7 +62,8 @@ help:
 	@echo "  elab-fail-all - four illegal configs must print ERROR: and finish"
 	@echo "  lint-verilator - Verilator lint on $(SRC_DIR)/axi4_to_dfi_bridge.v (skip if no verilator)"
 	@echo "  syn-check - Yosys on ../syn/yosys.ys (skip if no yosys)"
-	@echo "  ci     - run + run-smoke + run-smoke-zc + run-smoke-refresh + elab-fail-all + lint-verilator + syn-check"
+	@echo "  formal-fifo - Yosys BMC on async_fifo_gray wrapper (skip if no yosys)"
+	@echo "  ci     - run + smokes + elab-fail-all + lint + syn-check + formal-fifo"
 	@echo "  vcd    - run tests and write $(VCD) (open with gtkwave)"
 	@echo "  wave   - vcd + gtkwave $(VCD)"
 	@echo "  doc    - PDF from $(DOC_DIR)/DESIGN_SPEC.md (requires pandoc + pdflatex)"
@@ -132,7 +134,12 @@ syn-check:
 	cd ../syn && yosys -q yosys.ys
 	@echo "PASS: syn-check (yosys on axi4_to_dfi_bridge)"
 
-ci: run run-smoke run-smoke-zc run-smoke-refresh elab-fail-all lint-verilator syn-check
+formal-fifo:
+	@if ! command -v yosys >/dev/null 2>&1; then echo "SKIP: yosys not in PATH"; exit 0; fi
+	cd ../formal && yosys -q -s yosys_fifo_safety.ys
+	@echo "PASS: formal-fifo (yosys BMC on fifo_safety_top)"
+
+ci: run run-smoke run-smoke-zc run-smoke-refresh elab-fail-all lint-verilator syn-check formal-fifo
 
 vcd: $(SIM)
 	$(VVP) $(SIM) +vcd

@@ -1,23 +1,31 @@
 # Formal verification (optional)
 
-This tree is reserved for **bounded or full formal** runs that are heavier than the default **Icarus** simulation CI. Nothing here is required to build or simulate the bridge.
+Heavy checks beyond default **Icarus** simulation. Nothing here is required to run **`make -C test run`**.
 
-## Suggested first target: `async_fifo_gray`
+## Yosys-only: `async_fifo_gray` bounded safety
 
-The gray-pointer FIFO in `src/axi4_to_dfi_bridge.v` is self-contained enough to **black-box** or **cut** the rest of the design and prove small properties, for example:
+This repo includes a **single-clock** wrapper (`fifo_safety_top.sv`) that ties `wr_clk == rd_clk`. That does **not** prove metastability-safe CDC; it proves storage / flag consistency under a synchronous instance of the same RTL (Gray pointers + synchronizers become in-domain delay).
 
-- **FIFO depth / power-of-two**: already enforced by `initial` in RTL; formal can treat as assumption.
-- **Safety**: `wr_en && !full` does not corrupt `mem`; `rd_en && !empty` does not advance past empty (with correct Gray full/empty).
-- **Bounded reset**: both domains in reset, then release write side, then read side (or symmetric), for a bounded cycle limit.
+**Script:** `formal/yosys_fifo_safety.ys`  
+**Run (from repo root):** `make formal-fifo` or `make -C test formal-fifo`  
+**Or:** `cd formal && yosys -q -s yosys_fifo_safety.ys`
 
-A typical flow is **SymbiYosys** (`sby`) with **Yosys** + **BMC** (e.g. `bmc` mode, 20–200 cycles depending on depth). You will need to:
+Flow: `read_verilog -sv`, `hierarchy -top fifo_safety_top`, `prep`, **`async2sync`** (maps async-reset flops for `sat`), `flatten`, **`sat -seq 45 -prove-asserts -verify`**.
 
-1. Instantiate or extract `async_fifo_gray` as the top (or use `chformal` / manual bind of assertions).
-2. Constrain `wr_en` / `rd_en` as fair or arbitrary inputs under invariants you want to disprove.
-3. Add **SystemVerilog assertions** in a bind file or a wrapper module if you prefer not to touch the Verilog-2001 core.
+The wrapper:
 
-CDC **metastability** is not what BMC on RTL registers proves; keep claims to **digital safety/liveness under ideal synchronizer inputs** unless you use specialized CDC tools.
+- Holds an internal **phased reset** so BMC does not start from arbitrary post-`async2sync` register states.
+- **Assumes** the host does not push when `full` or pop when `empty`.
+- **Asserts** a reference depth counter stays `<= DEPTH` and `full` / `empty` are not both true.
+
+**Note:** Older Yosys (e.g. 0.9) may not parse SV `a -> b` inside `assume`; use `!(a) || b` (as in `fifo_safety_top.sv`).
+
+If **`yosys`** is not installed, **`make formal-fifo`** prints `SKIP` and exits 0 (same pattern as **`syn-check`**).
+
+## SymbiYosys / multi-clock (later)
+
+For true dual-clock BMC or k-induction with `sby`, see historical notes in git history or add a separate `*.sby` when you are ready to install **SymbiYosys** and solvers.
 
 ## Top-level `axi4_to_dfi_bridge`
 
-Full-bridge properties touch **AXI sequencing**, **DFI command timing**, and **two-clock FIFOs** at once. Treat that as a later step: start with the FIFO, then add **assume** on AXI masters and **assume** on the PHY model before attempting end-to-end properties.
+End-to-end properties (AXI + DFI + dual-clock FIFOs) are a later step: start with the FIFO proof above, then add assumptions on masters and PHY models.
