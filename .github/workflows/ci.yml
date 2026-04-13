@@ -15,7 +15,7 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y iverilog verilator
+          sudo apt-get install -y iverilog verilator yosys
 
-      - name: Main testbench + parameter smoke + Verilator lint
+      - name: Simulation, smokes, elab-fail, Verilator, Yosys syn + formal
         run: make -C test ci
