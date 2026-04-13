@@ -15,7 +15,7 @@ This document specifies the **axi4_to_dfi_bridge** RTL: an **AMBA AXI4** slave t
 
 **Out of scope (intentional)**
 
-- Full DRAM protocol (activate, precharge, refresh, mode registers, timing closure, bank state machines).
+- Full DRAM protocol (mode registers, tRAS/tWR/tRFC-class checks, timing closure, production bank interleaving).
 - DFI multi-phase timing (P0-P3) as required by many PHYs; the RTL uses a simplified single-phase view of command and data.
 - Production PHY training, update, and low-power sequences beyond tie-offs or stubs on optional DFI sideband signals.
 
@@ -86,7 +86,9 @@ A **single-transaction** SDRAM-style **open-page** FSM drives `dfi_*` (one AXI-e
 
 **Timing (dfi_clk cycles):** `MC_T_RP`, `MC_T_RCD`, `MC_CL` (read CAS to read-data phase), `DFI_WRITE_ACK_CYCLES` (after WRITE CAS before **B** is pushed into `u_fifo_bresp`), `MC_RD_DV_MAX` (valid wait after `MC_CL`). A value of **0** for `MC_T_RP`, `MC_T_RCD`, or `MC_CL` skips the corresponding wait state (no counter underflow). **`DFI_WRITE_ACK_CYCLES = 0`** means **no** extra turnaround cycles after WRITE CAS; the FSM still spends **one** `dfi_clk` in **`ST_WAIT_B`** with **`mc_ctr == 1`** so **`bresp_wr_en`** can fire (combinational **B** push requires that state).
 
-**Not in this block:** refresh, tRAS/tWR checks, DFI P0-P3 phasing.
+**Refresh (optional):** parameter **`MC_REFRESH_INTERVAL`** (default **0** = disabled). When **> 0**, a counter decrements only in **`ST_IDLE`** gaps when **`dfi_mc_ready`** is true and no request snapshot is pending (**`!wreq_rd_en_r && !rreq_rd_en_r`**). At **0**, the FSM walks banks **0 … 2^`DFI_BANK_WIDTH`-1**; for each bank with an open row (**`row_open_mask`**), it issues the same **PRE** encoding as normal traffic, waits **`MC_T_RP`**, then continues. Request FIFO pops are blocked while the counter is **0** or while **`rf_active`**. After the walk, **`refresh_ctr`** reloads to **`MC_REFRESH_INTERVAL`**.
+
+**Not in this block:** JEDEC-accurate **REF** command (auto-refresh) timing, **tRAS**/**tWR** checks, **DFI P0–P3** phasing.
 
 # 4. Data paths
 
@@ -146,6 +148,7 @@ Exact decode conditions are defined in **`src/axi4_to_dfi_bridge.v`** (combinati
 | `MC_T_RP`, `MC_T_RCD` | PRE and ACT timing. |
 | `MC_CL` | CAS-to-read-data phase length (PHY should align). |
 | `MC_RD_DV_MAX` | Max cycles to wait for `dfi_rddata_valid` after `MC_CL`. |
+| `MC_REFRESH_INTERVAL` | **dfi_clk** cycles between refresh walks (**0** = off). Countdown runs only in fully idle MC gaps; at **0** the design **PRE**-closes any open bank in index order, then reloads the counter. |
 | `DFI_INIT_START_CYCLES` | MC init: pulse `dfi_init_start` high for this many `dfi_clk` cycles after reset release; **0** ties off. |
 | `C_MAX_WRITE_AWLEN` | Legal **INCR** write burst length: **`AWLEN`** must be no greater than this value (default **3** = four beats). **0** restricts writes to single-beat only. |
 
@@ -157,7 +160,7 @@ At simulation/elaboration time, **`axi4_to_dfi_bridge`** and each **`async_fifo_
 - **`MC_COL_BITS + MC_ROW_BITS + DFI_BANK_WIDTH`** must not exceed **`C_AXI_ADDR_WIDTH`**; **`MC_COL_BITS`** and **`MC_ROW_BITS`** must be at least **1**; **`DFI_ADDR_WIDTH`** must cover **`MC_ROW_BITS`** and **`MC_COL_BITS`** on the command bus.
 - **`CDC_FIFO_DEPTH`** must be a power of two **>= 2** (same rule as **`async_fifo_gray` `DEPTH`**).
 - **`DFI_BANK_WIDTH`** must not exceed **24** (implementation limit on bank count).
-- **`C_AXI_ID_WIDTH`** must be **>= 1**; **`C_MAX_WRITE_AWLEN`** in **0..255**; timing integers **`MC_T_RP`**, **`MC_T_RCD`**, **`MC_CL`**, **`MC_RD_DV_MAX`**, **`DFI_WRITE_ACK_CYCLES`** must be **>= 0**.
+- **`C_AXI_ID_WIDTH`** must be **>= 1**; **`C_MAX_WRITE_AWLEN`** in **0..255**; timing integers **`MC_T_RP`**, **`MC_T_RCD`**, **`MC_CL`**, **`MC_RD_DV_MAX`**, **`DFI_WRITE_ACK_CYCLES`**, **`MC_REFRESH_INTERVAL`** must be **>= 0**.
 
 # 8. Verification
 
@@ -173,9 +176,11 @@ Simulation uses **Icarus Verilog** (`iverilog -g2001`). The testbench **`src/tb_
 - SDRAM-style MC checks (**PRE/ACT/READ CAS/WRITE CAS** counts) for open-page hit, row miss, and cold bank.
 - **Stress (Test 13):** xorshift32 **LFSR** drives gaps and bank/row/column choices. **Writes** (each followed by **B**) run first, then **reads** are issued only while the **`wreq`** FIFO is empty so **MC** order matches **`rreq`** issue order (the scheduler does not pop **`rreq`** until **`wreq`** is empty). **AR** spacing and **R** drains mirror the FIFO-fill test (**Icarus** + FWFT).
 
+**`tb_param_smoke_refresh`** enables **`MC_REFRESH_INTERVAL` > 0** on the DUT: a single cold write opens one bank, then after idle gaps the refresh walk issues exactly one **PRE** (monitored on **`dfi_clk`**); a second interval with all banks closed must not add further **PRE** pulses.
+
 Between some **AR** issues and between back-to-back **R** (or **B**) drains, the testbench inserts a few **`axi_aclk`** waits so **Icarus** simulation stays consistent with the gray **async FIFO** first-word-fall-through read path across **CDC** (tight back-to-back handshakes can otherwise show a wrong ID or a repeated beat in this environment).
 
-**CI:** **`make -C test ci`** runs the main testbench, **`tb_param_smoke`**, **`tb_param_smoke_zcycles`** ( **`MC_T_RP`/`MC_T_RCD`/`MC_CL`/`DFI_WRITE_ACK_CYCLES` all **0** ), **elaboration-fail** checks (illegal parameters must print **`ERROR:`** and **`$finish`**), and **Verilator** `--lint-only` on **`axi4_to_dfi_bridge.v`** (see **`.github/workflows/ci.yml`**).
+**CI:** **`make -C test ci`** runs the main testbench, **`tb_param_smoke`**, **`tb_param_smoke_zcycles`** ( **`MC_T_RP`/`MC_T_RCD`/`MC_CL`/`DFI_WRITE_ACK_CYCLES` all **0** ), **`tb_param_smoke_refresh`** (**`MC_REFRESH_INTERVAL` > 0**, **PRE** on refresh walk), **elaboration-fail** checks (illegal parameters must print **`ERROR:`** and **`$finish`**), **Verilator** `--lint-only` on **`axi4_to_dfi_bridge.v`**, and **`syn-check`** (**Yosys** on **`syn/yosys.ys`**, skipped if **`yosys`** is not installed; see **`.github/workflows/ci.yml`**).
 
 **Further hardening:** For stronger CDC ordering evidence than **Icarus** alone, re-verify **`async_fifo_gray`** with a second simulator, bounded formal, or a **registered read data path** designed together with **`rd_empty`** and the bridge’s **`wreq_snapshot` / `rreq_snapshot`** timing (a naive registered mux alone can deadlock or mis-`empty` without that co-design). See **README** roadmap for the ordered backlog.
 
@@ -195,6 +200,7 @@ Build and run: **`make -C test run`**; full automation: **`make -C test ci`** (s
 | 0.8 | LFSR stress phase (writes then reads); **`tb_param_smoke`**; **`make ci`** (**iverilog** + **verilator** lint); GitHub Actions workflow. |
 | 0.9 | **`tb_param_smoke_zcycles`**; **`tb_elab_fail`** + Makefile **`elab-fail-*`**; **`DFI_WRITE_ACK_CYCLES=0`** uses one **`ST_WAIT_B`** cycle so **B** is pushed. |
 | 0.10 | README roadmap update (FIFO + formal + refresh ordering); **`make audit`** (**`ci`** + design PDF). |
+| 0.11 | Optional **`MC_REFRESH_INTERVAL`** refresh walk (all-bank **PRE** when due); **`syn-check`** in **`make ci`**; **`formal/README.md`** template; **`syn/constraints.sdc`** SDC hints; **`tb_param_smoke_refresh`**. |
 
 # Document control
 

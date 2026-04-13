@@ -1,0 +1,15 @@
+# Yosys elaboration / synthesis sanity check for axi4_to_dfi_bridge (no bitstream).
+# Usage: yosys -q yosys.ys   (from this directory)
+#
+# Requires: yosys in PATH. Optional: nextpnr/icepack not used here.
+# For timing constraints in vendor flows, see constraints.sdc (comments only).
+
+read_verilog ../src/axi4_to_dfi_bridge.v
+hierarchy -top axi4_to_dfi_bridge -check
+proc
+memory_collect
+opt
+memory_map
+opt
+stat
+check

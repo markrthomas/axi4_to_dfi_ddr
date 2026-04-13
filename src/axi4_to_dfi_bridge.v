@@ -17,8 +17,10 @@
 //  C_AXI_DATA_WIDTH/8 (checked at elaboration); no byte-lane adapter.
 // The dfi_clk domain includes an SDRAM-style open-page scheduler: per-bank
 // row tracking, PRE (wrong row or closed), ACT, then READ/WRITE CAS with
-// parameterized tRP, tRCD, and MC_CL. Refresh and multi-clock DFI phase buses
-// (P0–P3) are not implemented. dfi_act_n is low only during ACT; optional
+// parameterized tRP, tRCD, and MC_CL. Optional all-bank refresh walk
+// (MC_REFRESH_INTERVAL, default 0 = off) issues PRE on any open bank then
+// reloads the interval counter; multi-clock DFI phase buses (P0–P3) are not
+// implemented. dfi_act_n is low only during ACT; optional
 // dfi_init_start pulse after reset uses DFI_INIT_START_CYCLES (default 0).
 //=============================================================================
 
@@ -185,6 +187,12 @@ module axi4_to_dfi_bridge #(
     parameter integer MC_T_RCD     = 4,  // ACT to READ/WRITE command
     parameter integer MC_CL        = 6,  // CAS to first read data (PHY should align)
     parameter integer MC_RD_DV_MAX = 16,  // cycles to wait for dfi_rddata_valid after CL
+
+    // Refresh pacing (dfi_clk): when > 0, count down in fully idle gaps between commands
+    // (mc_state==ST_IDLE, no request snapshot pending); at 0, walk banks 0..2^BANK-1 and
+    // PRE any open row (same encoding as normal PRE), then reload to MC_REFRESH_INTERVAL.
+    // 0 disables refresh (legacy behavior).
+    parameter integer MC_REFRESH_INTERVAL = 0,
 
     // DFI sideband: pulse dfi_init_start for this many dfi_clk cycles after reset release (0 = tie off)
     parameter integer DFI_INIT_START_CYCLES = 0,
@@ -491,6 +499,10 @@ module axi4_to_dfi_bridge #(
             $display("ERROR: axi4_to_dfi_bridge: MC timing and DFI_WRITE_ACK_CYCLES must be >= 0");
             $finish(1);
         end
+        if (MC_REFRESH_INTERVAL < 0) begin
+            $display("ERROR: axi4_to_dfi_bridge: MC_REFRESH_INTERVAL (%0d) must be >= 0", MC_REFRESH_INTERVAL);
+            $finish(1);
+        end
         if (C_MAX_WRITE_AWLEN < 0 || C_MAX_WRITE_AWLEN > 255) begin
             $display("ERROR: axi4_to_dfi_bridge: C_MAX_WRITE_AWLEN (%0d) must be in 0..255", C_MAX_WRITE_AWLEN);
             $finish(1);
@@ -508,6 +520,8 @@ module axi4_to_dfi_bridge #(
     localparam [3:0] ST_WAIT_CL  = 4'd8;
     localparam [3:0] ST_WAIT_DV  = 4'd9;
     localparam [3:0] ST_PULSE_R  = 4'd10;
+    localparam [3:0] ST_RF_PRE   = 4'd11;
+    localparam [3:0] ST_RF_NEXT  = 4'd12;
 
     reg wreq_rd_en_r;
     reg rreq_rd_en_r;
@@ -533,6 +547,10 @@ module axi4_to_dfi_bridge #(
     reg                      mc_got_rddata;
     integer                  open_row_rst_i;
 
+    reg                      rf_active;
+    reg [DFI_BANK_WIDTH-1:0] rf_bank;
+    reg [31:0]               refresh_ctr;
+
     wire [C_AXI_ADDR_WIDTH-1:0] wreq_addr =
         wreq_snapshot[STROBE_W+C_AXI_DATA_WIDTH +: C_AXI_ADDR_WIDTH];
     wire [C_AXI_ID_WIDTH-1:0] wreq_id =
@@ -551,10 +569,13 @@ module axi4_to_dfi_bridge #(
 
     wire mc_idle = (mc_state == ST_IDLE);
 
-    assign wreq_rd_en = dfi_mc_ready && mc_idle && !wreq_rd_en_r &&
-                        !rreq_rd_en_r && !wreq_empty && !bresp_full;
-    assign rreq_rd_en = dfi_mc_ready && mc_idle && !wreq_rd_en_r &&
-                        !rreq_rd_en_r && wreq_empty && !rreq_empty && !rresp_full;
+    // Block new FIFO pops while a refresh interval has expired (until walk completes).
+    wire rf_block_fifo = (MC_REFRESH_INTERVAL > 0) && (refresh_ctr == 32'd0) && !rf_active;
+
+    assign wreq_rd_en = dfi_mc_ready && mc_idle && !rf_block_fifo && !rf_active &&
+                        !wreq_rd_en_r && !rreq_rd_en_r && !wreq_empty && !bresp_full;
+    assign rreq_rd_en = dfi_mc_ready && mc_idle && !rf_block_fifo && !rf_active &&
+                        !wreq_rd_en_r && !rreq_rd_en_r && wreq_empty && !rreq_empty && !rresp_full;
 
     wire bresp_full;
     wire rresp_full;
@@ -739,6 +760,9 @@ module axi4_to_dfi_bridge #(
             row_open_mask    <= {NBANKS{1'b0}};
             r_capture        <= {C_AXI_DATA_WIDTH{1'b0}};
             mc_got_rddata    <= 1'b0;
+            rf_active        <= 1'b0;
+            rf_bank          <= {DFI_BANK_WIDTH{1'b0}};
+            refresh_ctr      <= (MC_REFRESH_INTERVAL > 0) ? MC_REFRESH_INTERVAL[31:0] : 32'd0;
             for (open_row_rst_i = 0; open_row_rst_i < NBANKS; open_row_rst_i = open_row_rst_i + 1)
                 open_row_mem[open_row_rst_i] <= {MC_ROW_BITS{1'b0}};
         end else begin
@@ -759,7 +783,12 @@ module axi4_to_dfi_bridge #(
 
             case (mc_state)
                 ST_IDLE: begin
-                    if (wreq_rd_en_r) begin
+                    if ((MC_REFRESH_INTERVAL > 0) && (refresh_ctr == 32'd0) && !rf_active &&
+                        dfi_mc_ready && !wreq_rd_en_r && !rreq_rd_en_r) begin
+                        rf_active <= 1'b1;
+                        rf_bank   <= {DFI_BANK_WIDTH{1'b0}};
+                        mc_state  <= ST_RF_NEXT;
+                    end else if (wreq_rd_en_r) begin
                         mc_is_wr <= 1'b1;
                         mc_wr_last_beat <= wreq_snapshot[WREQ_W-1];
                         mc_id    <= wreq_id;
@@ -796,7 +825,9 @@ module axi4_to_dfi_bridge #(
                             mc_state     <= ST_PRE_CMD;
                         end else
                             mc_state <= ST_RD_CMD;
-                    end
+                    end else if ((MC_REFRESH_INTERVAL > 0) && !rf_active && dfi_mc_ready &&
+                                 !wreq_rd_en_r && !rreq_rd_en_r && (refresh_ctr != 32'd0))
+                        refresh_ctr <= refresh_ctr - 32'd1;
                 end
                 ST_PRE_CMD: begin
                     dfi_bank    <= mc_bank;
@@ -906,6 +937,34 @@ module axi4_to_dfi_bridge #(
                 ST_PULSE_R: begin
                     if (!rresp_full)
                         mc_state <= ST_IDLE;
+                end
+                ST_RF_PRE: begin
+                    dfi_bank    <= rf_bank;
+                    dfi_address <= open_row_mem[rf_bank];
+                    dfi_ras_n   <= 1'b0;
+                    dfi_cas_n   <= 1'b1;
+                    dfi_we_n    <= 1'b0;
+                    dfi_cs_n    <= {DFI_CS_WIDTH{1'b0}};
+                    row_open_mask[rf_bank] <= 1'b0;
+                    mc_after_rp <= ST_RF_NEXT;
+                    if (MC_T_RP == 0)
+                        mc_state <= ST_RF_NEXT;
+                    else begin
+                        mc_ctr   <= MC_T_RP[7:0];
+                        mc_state <= ST_WAIT_RP;
+                    end
+                end
+                ST_RF_NEXT: begin
+                    if (row_open_mask[rf_bank])
+                        mc_state <= ST_RF_PRE;
+                    else if (rf_bank == {DFI_BANK_WIDTH{1'b1}}) begin
+                        rf_active   <= 1'b0;
+                        refresh_ctr <= MC_REFRESH_INTERVAL[31:0];
+                        mc_state    <= ST_IDLE;
+                    end else begin
+                        rf_bank  <= rf_bank + 1'b1;
+                        mc_state <= ST_RF_NEXT;
+                    end
                 end
                 default: mc_state <= ST_IDLE;
             endcase

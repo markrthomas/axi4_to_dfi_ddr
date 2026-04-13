@@ -2,7 +2,7 @@
 
 Verilog RTL that connects an **AMBA AXI4** slave interface to **JEDEC DFI**-style signals aimed at a DDR PHY / memory-controller path. The design uses **two clock domains** (AXI vs DFI) with gray-code **async FIFOs** and synchronizers for CDC.
 
-This repository is a practical starting point for simulation and integration; full DRAM scheduling (activate, precharge, refresh, timing, multi-phase DFI) is left to you or to a larger controller stack.
+This repository is a practical starting point for simulation and integration. The RTL includes an **optional** open-page scheduler with **parameterized PRE/ACT/CAS** and an **optional all-bank refresh walk** (`MC_REFRESH_INTERVAL`, default off); full JEDEC scheduling, **tRAS**/**tWR**/**tRFC** class timing, and **multi-phase DFI** are still left to a larger stack or your PHY integration.
 
 ## Repository layout
 
@@ -12,12 +12,16 @@ This repository is a practical starting point for simulation and integration; fu
 | `src/tb_axi4_to_dfi_bridge.v` | Self-contained testbench: dual clocks, PHY read model, **SLVERR** paths, **R/B** backpressure, **rresp**/**bresp** FIFO fill (depth 8), MC command counters, LFSR stress (see **Design spec** section 8) |
 | `src/tb_param_smoke.v` | Minimal second top: **`CDC_FIFO_DEPTH=16`**, **`DFI_INIT_START_CYCLES=0`**; one write and one read (**`make -C test run-smoke`**) |
 | `src/tb_param_smoke_zcycles.v` | Smoke with **`MC_T_RP`/`MC_T_RCD`/`MC_CL`/`DFI_WRITE_ACK_CYCLES` = 0**; cold write/read + row-miss write/read (**`make -C test run-smoke-zc`**) |
+| `src/tb_param_smoke_refresh.v` | Smoke with **`MC_REFRESH_INTERVAL` > 0**: cold write then **PRE** on refresh walk (**`make -C test run-smoke-refresh`**) |
 | `src/tb_elab_fail.v` | Four tiny tops used by **`elab-fail-*`** to assert parameter guards print **`ERROR:`** |
 | `Makefile` | Repo root shortcuts: `run`, `ci`, `clean`, `doc`, `doc-html`, etc. |
-| `test/Makefile` | Simulation: **iverilog**/**vvp**, **`run-smoke`**, **`lint-verilator`**, **`ci`**; VCD/**gtkwave**; `doc` / `doc-html` wrappers |
+| `test/Makefile` | Simulation: **iverilog**/**vvp**, **`run-smoke`**, **`run-smoke-zc`**, **`run-smoke-refresh`**, **`lint-verilator`**, **`syn-check`**, **`ci`**; VCD/**gtkwave**; `doc` / `doc-html` wrappers |
 | `.github/workflows/ci.yml` | **GitHub Actions**: **`make -C test ci`** on **main** |
 | `doc/DESIGN_SPEC.md` | Design specification (source for PDF/HTML) |
 | `doc/Makefile` | `pdf`, `html`, `clean` (outputs under `doc/build/`) |
+| `syn/yosys.ys` | Optional **Yosys** elaboration/synthesis sanity script for the bridge top |
+| `syn/constraints.sdc` | Commented **SDC** hints (CDC false paths); not read by Yosys script |
+| `formal/README.md` | Pointers for optional SymbiYosys / bounded checks (FIFO first) |
 | `LICENSE` | MIT |
 
 ## Requirements
@@ -39,7 +43,7 @@ From the **repository root**, you can use the root `Makefile` or call `test/` di
 ```bash
 make help             # list root targets
 make run              # same as: make -C test run
-make ci               # main TB + parameter smoke + Verilator lint (see test/Makefile)
+make ci               # main TB + smokes + elab-fail + Verilator + optional Yosys syn-check
 make audit            # make ci then design PDF (needs pandoc + pdflatex)
 make build            # compile only → test/build/sim.vvp
 make vcd              # run with +vcd → test/build/sim.vcd
@@ -54,9 +58,10 @@ make -C test build
 make -C test run      # default if you run: make -C test
 make -C test run-smoke   # alternate depth: tb_param_smoke (CDC_FIFO_DEPTH=16)
 make -C test run-smoke-zc   # zero-cycle MC timing smoke
+make -C test run-smoke-refresh  # MC_REFRESH_INTERVAL refresh PRE
 make -C test elab-fail-all  # illegal parameters must fail with ERROR:
 make -C test lint-verilator  # optional; skips if verilator not installed
-make -C test ci       # run + both smokes + elab-fail-all + lint-verilator
+make -C test ci       # run + three smokes + elab-fail-all + lint + syn-check (yosys optional)
 make -C test vcd
 make -C test wave
 ```
