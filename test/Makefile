@@ -125,19 +125,30 @@ elab-fail-fifo: $(ELAB_FAIL_SRC)
 elab-fail-all: elab-fail-width elab-fail-depth elab-fail-addrmap elab-fail-fifo
 	@echo "PASS: elab-fail-all (four expected elaboration errors)"
 
+# Note: each Makefile recipe line runs in a separate shell; put skip+run in one
+# block so a missing tool does not fall through to the next line.
 lint-verilator:
-	@if ! command -v $(VERILATOR) >/dev/null 2>&1; then echo "SKIP: verilator not in PATH"; exit 0; fi
-	$(VERILINT) $(SRC_DIR)/axi4_to_dfi_bridge.v
+	@if command -v $(VERILATOR) >/dev/null 2>&1; then \
+		$(VERILINT) $(SRC_DIR)/axi4_to_dfi_bridge.v; \
+	else \
+		echo "SKIP: verilator not in PATH"; \
+	fi
 
 syn-check:
-	@if ! command -v yosys >/dev/null 2>&1; then echo "SKIP: yosys not in PATH"; exit 0; fi
-	cd ../syn && yosys -q yosys.ys
-	@echo "PASS: syn-check (yosys on axi4_to_dfi_bridge)"
+	@if command -v yosys >/dev/null 2>&1; then \
+		cd ../syn && yosys -q yosys.ys && \
+		echo "PASS: syn-check (yosys on axi4_to_dfi_bridge)"; \
+	else \
+		echo "SKIP: yosys not in PATH"; \
+	fi
 
 formal-fifo:
-	@if ! command -v yosys >/dev/null 2>&1; then echo "SKIP: yosys not in PATH"; exit 0; fi
-	cd ../formal && yosys -q -s yosys_fifo_safety.ys
-	@echo "PASS: formal-fifo (yosys BMC on fifo_safety_top)"
+	@if command -v yosys >/dev/null 2>&1; then \
+		cd ../formal && yosys -q -s yosys_fifo_safety.ys && \
+		echo "PASS: formal-fifo (yosys BMC on fifo_safety_top)"; \
+	else \
+		echo "SKIP: yosys not in PATH"; \
+	fi
 
 ci: run run-smoke run-smoke-zc run-smoke-refresh elab-fail-all lint-verilator syn-check formal-fifo
 
