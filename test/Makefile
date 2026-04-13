@@ -51,7 +51,8 @@ VERILATOR := verilator
 VERILINT  := $(VERILATOR) --lint-only -Wall -Wno-DECLFILENAME -Wno-WIDTH -Wno-UNUSED
 
 .PHONY: all build run test run-smoke run-smoke-zc run-smoke-refresh run-smoke-tras \
-	elab-fail-width elab-fail-depth elab-fail-addrmap elab-fail-fifo elab-fail-all \
+	elab-fail-width elab-fail-depth elab-fail-addrmap elab-fail-fifo \
+	elab-fail-mcwide elab-fail-dfiinit-neg elab-fail-dfiinit-ovf elab-fail-all \
 	lint-verilator syn-check formal-fifo ci vcd wave clean help doc doc-html
 
 all: run
@@ -64,7 +65,7 @@ help:
 	@echo "  run-smoke-zc - zero-cycle MC timing + row-miss smoke ($(SMOKE_ZC_SIM))"
 	@echo "  run-smoke-refresh - MC_REFRESH_INTERVAL + refresh PRE ($(SMOKE_RF_SIM))"
 	@echo "  run-smoke-tras - MC_T_RAS / MC_T_WR row-miss ($(SMOKE_TRAS_SIM))"
-	@echo "  elab-fail-all - four illegal configs must print ERROR: and finish"
+	@echo "  elab-fail-all - seven illegal configs must print ERROR: and finish"
 	@echo "  lint-verilator - Verilator lint on $(SRC_DIR)/axi4_to_dfi_bridge.v (skip if no verilator)"
 	@echo "  syn-check - Yosys on ../syn/yosys.ys (skip if no yosys)"
 	@echo "  formal-fifo - Yosys BMC on async_fifo_gray wrapper (skip if no yosys)"
@@ -134,8 +135,24 @@ elab-fail-fifo: $(ELAB_FAIL_SRC)
 	$(IVERILOG) $(IVERFLAGS) -o $(BUILD_DIR)/elab_fifo.vvp -s tb_elab_fail_fifo $(ELAB_FAIL_SRC)
 	$(VVP) $(BUILD_DIR)/elab_fifo.vvp 2>&1 | tee $(BUILD_DIR)/elab_fifo.log | grep -q "ERROR: async_fifo_gray"
 
-elab-fail-all: elab-fail-width elab-fail-depth elab-fail-addrmap elab-fail-fifo
-	@echo "PASS: elab-fail-all (four expected elaboration errors)"
+elab-fail-mcwide: $(ELAB_FAIL_SRC)
+	mkdir -p $(BUILD_DIR)
+	$(IVERILOG) $(IVERFLAGS) -o $(BUILD_DIR)/elab_mcwide.vvp -s tb_elab_fail_mcwide $(ELAB_FAIL_SRC)
+	$(VVP) $(BUILD_DIR)/elab_mcwide.vvp 2>&1 | tee $(BUILD_DIR)/elab_mcwide.log | grep -q "8-bit counters"
+
+elab-fail-dfiinit-neg: $(ELAB_FAIL_SRC)
+	mkdir -p $(BUILD_DIR)
+	$(IVERILOG) $(IVERFLAGS) -o $(BUILD_DIR)/elab_dfiinit_neg.vvp -s tb_elab_fail_dfiinit_neg $(ELAB_FAIL_SRC)
+	$(VVP) $(BUILD_DIR)/elab_dfiinit_neg.vvp 2>&1 | tee $(BUILD_DIR)/elab_dfiinit_neg.log | grep -q "DFI_INIT_START_CYCLES"
+
+elab-fail-dfiinit-ovf: $(ELAB_FAIL_SRC)
+	mkdir -p $(BUILD_DIR)
+	$(IVERILOG) $(IVERFLAGS) -o $(BUILD_DIR)/elab_dfiinit_ovf.vvp -s tb_elab_fail_dfiinit_ovf $(ELAB_FAIL_SRC)
+	$(VVP) $(BUILD_DIR)/elab_dfiinit_ovf.vvp 2>&1 | tee $(BUILD_DIR)/elab_dfiinit_ovf.log | grep -q "DFI_INIT_START_CYCLES"
+
+elab-fail-all: elab-fail-width elab-fail-depth elab-fail-addrmap elab-fail-fifo \
+	elab-fail-mcwide elab-fail-dfiinit-neg elab-fail-dfiinit-ovf
+	@echo "PASS: elab-fail-all (seven expected elaboration errors)"
 
 # Note: each Makefile recipe line runs in a separate shell; put skip+run in one
 # block so a missing tool does not fall through to the next line.

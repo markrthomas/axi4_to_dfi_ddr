@@ -152,7 +152,7 @@ Exact decode conditions are defined in **`src/axi4_to_dfi_bridge.v`** (combinati
 | `MC_CL` | CAS-to-read-data phase length (PHY should align). |
 | `MC_RD_DV_MAX` | Max cycles to wait for `dfi_rddata_valid` after `MC_CL`. |
 | `MC_REFRESH_INTERVAL` | **dfi_clk** cycles between refresh walks (**0** = off). Countdown runs only in fully idle MC gaps; at **0** the design **PRE**-closes any open bank in index order, then reloads the counter. |
-| `DFI_INIT_START_CYCLES` | MC init: pulse `dfi_init_start` high for this many `dfi_clk` cycles after reset release; **0** ties off. |
+| `DFI_INIT_START_CYCLES` | MC init: pulse `dfi_init_start` high for this many `dfi_clk` cycles after reset release; **0** ties off. Must be **0..65535** (16-bit counter in RTL). |
 | `C_MAX_WRITE_AWLEN` | Legal **INCR** write burst length: **`AWLEN`** must be no greater than this value (default **3** = four beats). **0** restricts writes to single-beat only. |
 
 ## 7.1 Elaboration checks (RTL)
@@ -163,7 +163,9 @@ At simulation/elaboration time, **`axi4_to_dfi_bridge`** and each **`async_fifo_
 - **`MC_COL_BITS + MC_ROW_BITS + DFI_BANK_WIDTH`** must not exceed **`C_AXI_ADDR_WIDTH`**; **`MC_COL_BITS`** and **`MC_ROW_BITS`** must be at least **1**; **`DFI_ADDR_WIDTH`** must cover **`MC_ROW_BITS`** and **`MC_COL_BITS`** on the command bus.
 - **`CDC_FIFO_DEPTH`** must be a power of two **>= 2** (same rule as **`async_fifo_gray` `DEPTH`**).
 - **`DFI_BANK_WIDTH`** must not exceed **24** (implementation limit on bank count).
-- **`C_AXI_ID_WIDTH`** must be **>= 1**; **`C_MAX_WRITE_AWLEN`** in **0..255**; timing integers **`MC_T_RP`**, **`MC_T_RCD`**, **`MC_T_RAS`**, **`MC_T_WR`**, **`MC_CL`**, **`MC_RD_DV_MAX`**, **`DFI_WRITE_ACK_CYCLES`**, **`MC_REFRESH_INTERVAL`** must be **>= 0**.
+- **`C_AXI_ID_WIDTH`** must be **>= 1**; **`C_MAX_WRITE_AWLEN`** in **0..255**; **`MC_REFRESH_INTERVAL`** must be **>= 0**.
+- **`MC_T_RP`**, **`MC_T_RCD`**, **`MC_T_RAS`**, **`MC_T_WR`**, **`MC_CL`**, **`MC_RD_DV_MAX`**, and **`DFI_WRITE_ACK_CYCLES`** must be in **0..255** (stored in **8-bit** counters; larger values are not silently truncated).
+- **`DFI_INIT_START_CYCLES`** must be in **0..65535** (16-bit counter).
 
 # 8. Verification
 
@@ -187,7 +189,7 @@ Simulation uses **Icarus Verilog** (`iverilog -g2001`). The testbench **`src/tb_
 
 Between some **AR** issues and between back-to-back **R** (or **B**) drains, the testbench inserts a few **`axi_aclk`** waits so **Icarus** simulation stays consistent with the gray **async FIFO** first-word-fall-through read path across **CDC** (tight back-to-back handshakes can otherwise show a wrong ID or a repeated beat in this environment).
 
-**CI:** **`make -C test ci`** runs the main testbench, **`tb_param_smoke`**, **`tb_param_smoke_zcycles`** ( **`MC_T_RP`/`MC_T_RCD`/`MC_CL`/`DFI_WRITE_ACK_CYCLES` all **0** ), **`tb_param_smoke_refresh`** (**`MC_REFRESH_INTERVAL` > 0**), **`tb_param_smoke_tras`** (**`MC_T_RAS`/`MC_T_WR`**), **elaboration-fail** checks (illegal parameters must print **`ERROR:`** and **`$finish`**), **Verilator** `--lint-only` on **`axi4_to_dfi_bridge.v`**, **`syn-check`** (**Yosys** on **`syn/yosys.ys`**), and **`formal-fifo`** (**Yosys** bounded BMC on **`formal/fifo_safety_top.sv`**); the Yosys targets are skipped if **`yosys`** is not installed (see **`.github/workflows/ci.yml`**).
+**CI:** **`make -C test ci`** runs the main testbench, **`tb_param_smoke`**, **`tb_param_smoke_zcycles`** ( **`MC_T_RP`/`MC_T_RCD`/`MC_CL`/`DFI_WRITE_ACK_CYCLES` all **0** ), **`tb_param_smoke_refresh`** (**`MC_REFRESH_INTERVAL` > 0**), **`tb_param_smoke_tras`** (**`MC_T_RAS`/`MC_T_WR`**), **seven** **`elab-fail-*`** elaboration guards (illegal parameters must print **`ERROR:`** and **`$finish`**), **Verilator** `--lint-only` on **`axi4_to_dfi_bridge.v`**, **`syn-check`** (**Yosys** on **`syn/yosys.ys`**), and **`formal-fifo`** (**Yosys** bounded BMC on **`formal/fifo_safety_top.sv`**); the Yosys targets are skipped if **`yosys`** is not installed (see **`.github/workflows/ci.yml`**).
 
 **Further hardening:** For stronger CDC ordering evidence than **Icarus** alone, re-verify **`async_fifo_gray`** with a second simulator, bounded formal, or a **registered read data path** designed together with **`rd_empty`** and the bridge’s **`wreq_snapshot` / `rreq_snapshot`** timing (a naive registered mux alone can deadlock or mis-`empty` without that co-design). See **README** roadmap for the ordered backlog.
 
@@ -210,6 +212,7 @@ Build and run: **`make -C test run`**; full automation: **`make -C test ci`** (s
 | 0.11 | Optional **`MC_REFRESH_INTERVAL`** refresh walk (all-bank **PRE** when due); **`syn-check`** in **`make ci`**; **`formal/README.md`** template; **`syn/constraints.sdc`** SDC hints; **`tb_param_smoke_refresh`**. |
 | 0.12 | **Yosys-only** bounded formal on **`async_fifo_gray`** via **`formal/fifo_safety_top.sv`** and **`make formal-fifo`**. |
 | 0.13 | **`MC_T_RAS`** / **`MC_T_WR`** per-bank **PRE** gating and **`ST_WAIT_PRE`**; **`tb_param_smoke_tras`**. |
+| 0.14 | Elaboration: **`MC_T_*` / `MC_CL` / `MC_RD_DV_MAX` / `DFI_WRITE_ACK_CYCLES`** ≤ **255**; **`DFI_INIT_START_CYCLES`** in **0..65535**; three more **`elab-fail-*`** tops. |
 
 # Document control
 

@@ -14,7 +14,7 @@ This repository is a practical starting point for simulation and integration. Th
 | `src/tb_param_smoke_zcycles.v` | Smoke with **`MC_T_RP`/`MC_T_RCD`/`MC_CL`/`DFI_WRITE_ACK_CYCLES` = 0**; cold write/read + row-miss write/read (**`make -C test run-smoke-zc`**) |
 | `src/tb_param_smoke_refresh.v` | Smoke with **`MC_REFRESH_INTERVAL` > 0**: cold write then **PRE** on refresh walk (**`make -C test run-smoke-refresh`**) |
 | `src/tb_param_smoke_tras.v` | Smoke with **`MC_T_RAS`** / **`MC_T_WR`** > 0: two same-bank row-miss writes (**`make -C test run-smoke-tras`**) |
-| `src/tb_elab_fail.v` | Four tiny tops used by **`elab-fail-*`** to assert parameter guards print **`ERROR:`** |
+| `src/tb_elab_fail.v` | Mis-parameterized tops for **`elab-fail-*`** / **`elab-fail-all`** (expect **`ERROR:`** then **`$finish`**) |
 | `Makefile` | Repo root shortcuts: `run`, `ci`, `clean`, `doc`, `doc-html`, etc. |
 | `test/Makefile` | Simulation: **iverilog**/**vvp**, **`run-smoke*`** (incl. **`run-smoke-tras`**), **`lint-verilator`**, **`syn-check`**, **`formal-fifo`**, **`ci`**; VCD/**gtkwave**; `doc` / `doc-html` wrappers |
 | `.github/workflows/ci.yml` | **GitHub Actions**: **`make -C test ci`** on **main** |
@@ -64,7 +64,7 @@ make -C test run-smoke-refresh  # MC_REFRESH_INTERVAL refresh PRE
 make -C test run-smoke-tras     # MC_T_RAS / MC_T_WR row-miss writes
 make -C test elab-fail-all  # illegal parameters must fail with ERROR:
 make -C test lint-verilator  # optional; skips if verilator not installed
-make -C test ci       # run + three smokes + elab-fail-all + lint + syn-check (yosys optional)
+make -C test ci       # run + four smokes + elab-fail-all + lint + syn-check + formal-fifo (yosys optional)
 make -C test vcd
 make -C test wave
 ```

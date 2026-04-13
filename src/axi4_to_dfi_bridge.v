@@ -505,6 +505,15 @@ module axi4_to_dfi_bridge #(
             $display("ERROR: axi4_to_dfi_bridge: MC timing and DFI_WRITE_ACK_CYCLES must be >= 0");
             $finish(1);
         end
+        if (MC_T_RP > 255 || MC_T_RCD > 255 || MC_T_RAS > 255 || MC_T_WR > 255 || MC_CL > 255 ||
+            MC_RD_DV_MAX > 255 || DFI_WRITE_ACK_CYCLES > 255) begin
+            $display("ERROR: axi4_to_dfi_bridge: MC_T_RP, MC_T_RCD, MC_T_RAS, MC_T_WR, MC_CL, MC_RD_DV_MAX, and DFI_WRITE_ACK_CYCLES must be <= 255 (8-bit counters in RTL)");
+            $finish(1);
+        end
+        if (DFI_INIT_START_CYCLES < 0 || DFI_INIT_START_CYCLES > 65535) begin
+            $display("ERROR: axi4_to_dfi_bridge: DFI_INIT_START_CYCLES (%0d) must be in 0..65535", DFI_INIT_START_CYCLES);
+            $finish(1);
+        end
         if (MC_REFRESH_INTERVAL < 0) begin
             $display("ERROR: axi4_to_dfi_bridge: MC_REFRESH_INTERVAL (%0d) must be >= 0", MC_REFRESH_INTERVAL);
             $finish(1);
