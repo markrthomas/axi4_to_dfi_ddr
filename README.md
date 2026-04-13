@@ -13,9 +13,10 @@ This repository is a practical starting point for simulation and integration. Th
 | `src/tb_param_smoke.v` | Minimal second top: **`CDC_FIFO_DEPTH=16`**, **`DFI_INIT_START_CYCLES=0`**; one write and one read (**`make -C test run-smoke`**) |
 | `src/tb_param_smoke_zcycles.v` | Smoke with **`MC_T_RP`/`MC_T_RCD`/`MC_CL`/`DFI_WRITE_ACK_CYCLES` = 0**; cold write/read + row-miss write/read (**`make -C test run-smoke-zc`**) |
 | `src/tb_param_smoke_refresh.v` | Smoke with **`MC_REFRESH_INTERVAL` > 0**: cold write then **PRE** on refresh walk (**`make -C test run-smoke-refresh`**) |
+| `src/tb_param_smoke_tras.v` | Smoke with **`MC_T_RAS`** / **`MC_T_WR`** > 0: two same-bank row-miss writes (**`make -C test run-smoke-tras`**) |
 | `src/tb_elab_fail.v` | Four tiny tops used by **`elab-fail-*`** to assert parameter guards print **`ERROR:`** |
 | `Makefile` | Repo root shortcuts: `run`, `ci`, `clean`, `doc`, `doc-html`, etc. |
-| `test/Makefile` | Simulation: **iverilog**/**vvp**, **`run-smoke`**, **`run-smoke-zc`**, **`run-smoke-refresh`**, **`lint-verilator`**, **`syn-check`**, **`ci`**; VCD/**gtkwave**; `doc` / `doc-html` wrappers |
+| `test/Makefile` | Simulation: **iverilog**/**vvp**, **`run-smoke*`** (incl. **`run-smoke-tras`**), **`lint-verilator`**, **`syn-check`**, **`formal-fifo`**, **`ci`**; VCD/**gtkwave**; `doc` / `doc-html` wrappers |
 | `.github/workflows/ci.yml` | **GitHub Actions**: **`make -C test ci`** on **main** |
 | `doc/DESIGN_SPEC.md` | Design specification (source for PDF/HTML) |
 | `doc/Makefile` | `pdf`, `html`, `clean` (outputs under `doc/build/`) |
@@ -60,6 +61,7 @@ make -C test run      # default if you run: make -C test
 make -C test run-smoke   # alternate depth: tb_param_smoke (CDC_FIFO_DEPTH=16)
 make -C test run-smoke-zc   # zero-cycle MC timing smoke
 make -C test run-smoke-refresh  # MC_REFRESH_INTERVAL refresh PRE
+make -C test run-smoke-tras     # MC_T_RAS / MC_T_WR row-miss writes
 make -C test elab-fail-all  # illegal parameters must fail with ERROR:
 make -C test lint-verilator  # optional; skips if verilator not installed
 make -C test ci       # run + three smokes + elab-fail-all + lint + syn-check (yosys optional)

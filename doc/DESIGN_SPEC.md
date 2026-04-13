@@ -84,11 +84,13 @@ A **single-transaction** SDRAM-style **open-page** FSM drives `dfi_*` (one AXI-e
 2. Same open row: **CAS only**.
 3. Different open row: **PRE**, wait **MC_T_RP**, then **ACT**, wait **MC_T_RCD**, then **CAS**.
 
-**Timing (dfi_clk cycles):** `MC_T_RP`, `MC_T_RCD`, `MC_CL` (read CAS to read-data phase), `DFI_WRITE_ACK_CYCLES` (after WRITE CAS before **B** is pushed into `u_fifo_bresp`), `MC_RD_DV_MAX` (valid wait after `MC_CL`). A value of **0** for `MC_T_RP`, `MC_T_RCD`, or `MC_CL` skips the corresponding wait state (no counter underflow). **`DFI_WRITE_ACK_CYCLES = 0`** means **no** extra turnaround cycles after WRITE CAS; the FSM still spends **one** `dfi_clk` in **`ST_WAIT_B`** with **`mc_ctr == 1`** so **`bresp_wr_en`** can fire (combinational **B** push requires that state).
+**`MC_T_RAS` / `MC_T_WR` (optional, default 0):** per-bank **`dfi_clk`** counters (see **`bank_ras_cnt`**, **`bank_wr_cnt`** in RTL). **`MC_T_RAS`**: minimum cycles from **ACT** command until **PRE** is allowed for that bank (counter also decrements during **`ST_WAIT_RCD`** while the row is not yet marked open). **`MC_T_WR`**: minimum cycles from each **WRITE** CAS until **PRE** is allowed for that bank (reloaded on every write to the bank). If a row miss or refresh walk would issue **PRE** before both counters for that bank are zero, the FSM enters **`ST_WAIT_PRE`** until **`bank_pre_ready`** holds, then continues to **`ST_PRE_CMD`** or **`ST_RF_PRE`**.
+
+**Timing (dfi_clk cycles):** `MC_T_RP`, `MC_T_RCD`, `MC_CL` (read CAS to read-data phase), `DFI_WRITE_ACK_CYCLES` (after WRITE CAS before **B** is pushed into `u_fifo_bresp`), `MC_RD_DV_MAX` (valid wait after `MC_CL`). A value of **0** for `MC_T_RP`, `MC_T_RCD`, `MC_CL`, `MC_T_RAS`, or `MC_T_WR` skips the corresponding wait (no counter underflow for **`MC_T_RAS`/`MC_T_WR`** means **PRE** is not delayed by that constraint). **`DFI_WRITE_ACK_CYCLES = 0`** means **no** extra turnaround cycles after WRITE CAS; the FSM still spends **one** `dfi_clk` in **`ST_WAIT_B`** with **`mc_ctr == 1`** so **`bresp_wr_en`** can fire (combinational **B** push requires that state).
 
 **Refresh (optional):** parameter **`MC_REFRESH_INTERVAL`** (default **0** = disabled). When **> 0**, a counter decrements only in **`ST_IDLE`** gaps when **`dfi_mc_ready`** is true and no request snapshot is pending (**`!wreq_rd_en_r && !rreq_rd_en_r`**). At **0**, the FSM walks banks **0 … 2^`DFI_BANK_WIDTH`-1**; for each bank with an open row (**`row_open_mask`**), it issues the same **PRE** encoding as normal traffic, waits **`MC_T_RP`**, then continues. Request FIFO pops are blocked while the counter is **0** or while **`rf_active`**. After the walk, **`refresh_ctr`** reloads to **`MC_REFRESH_INTERVAL`**.
 
-**Not in this block:** JEDEC-accurate **REF** command (auto-refresh) timing, **tRAS**/**tWR** checks, **DFI P0–P3** phasing.
+**Not in this block:** JEDEC-accurate **REF** command (auto-refresh) timing, full **tRFC**/**tRC** bookkeeping, **DFI P0–P3** phasing.
 
 # 4. Data paths
 
@@ -146,6 +148,7 @@ Exact decode conditions are defined in **`src/axi4_to_dfi_bridge.v`** (combinati
 | `DFI_READ_DATA_CYCLES` | Reserved / legacy; read path uses `MC_CL` and `MC_RD_DV_MAX`. |
 | `MC_COL_BITS`, `MC_ROW_BITS` | Address field sizes for bank/row/col decode. |
 | `MC_T_RP`, `MC_T_RCD` | PRE and ACT timing. |
+| `MC_T_RAS`, `MC_T_WR` | Min **dfi_clk** cycles from **ACT** (resp. **WRITE** CAS) to **PRE** for the same bank (**0** = no extra **`ST_WAIT_PRE`** delay for that constraint). |
 | `MC_CL` | CAS-to-read-data phase length (PHY should align). |
 | `MC_RD_DV_MAX` | Max cycles to wait for `dfi_rddata_valid` after `MC_CL`. |
 | `MC_REFRESH_INTERVAL` | **dfi_clk** cycles between refresh walks (**0** = off). Countdown runs only in fully idle MC gaps; at **0** the design **PRE**-closes any open bank in index order, then reloads the counter. |
@@ -160,7 +163,7 @@ At simulation/elaboration time, **`axi4_to_dfi_bridge`** and each **`async_fifo_
 - **`MC_COL_BITS + MC_ROW_BITS + DFI_BANK_WIDTH`** must not exceed **`C_AXI_ADDR_WIDTH`**; **`MC_COL_BITS`** and **`MC_ROW_BITS`** must be at least **1**; **`DFI_ADDR_WIDTH`** must cover **`MC_ROW_BITS`** and **`MC_COL_BITS`** on the command bus.
 - **`CDC_FIFO_DEPTH`** must be a power of two **>= 2** (same rule as **`async_fifo_gray` `DEPTH`**).
 - **`DFI_BANK_WIDTH`** must not exceed **24** (implementation limit on bank count).
-- **`C_AXI_ID_WIDTH`** must be **>= 1**; **`C_MAX_WRITE_AWLEN`** in **0..255**; timing integers **`MC_T_RP`**, **`MC_T_RCD`**, **`MC_CL`**, **`MC_RD_DV_MAX`**, **`DFI_WRITE_ACK_CYCLES`**, **`MC_REFRESH_INTERVAL`** must be **>= 0**.
+- **`C_AXI_ID_WIDTH`** must be **>= 1**; **`C_MAX_WRITE_AWLEN`** in **0..255**; timing integers **`MC_T_RP`**, **`MC_T_RCD`**, **`MC_T_RAS`**, **`MC_T_WR`**, **`MC_CL`**, **`MC_RD_DV_MAX`**, **`DFI_WRITE_ACK_CYCLES`**, **`MC_REFRESH_INTERVAL`** must be **>= 0**.
 
 # 8. Verification
 
@@ -180,9 +183,11 @@ Simulation uses **Icarus Verilog** (`iverilog -g2001`). The testbench **`src/tb_
 
 **`make formal-fifo`** (optional): **Yosys** bounded **`sat -prove-asserts`** on **`formal/fifo_safety_top.sv`**, a single-clock instance of **`async_fifo_gray`** with phased reset and host **`assume`** on **`full`**/**`empty`** (see **`formal/README.md`**). This is **not** a substitute for CDC signoff on unrelated clock ratios.
 
+**`tb_param_smoke_tras`** instantiates the DUT with **`MC_T_RAS`** and **`MC_T_WR`** both **> 0** and runs two same-bank row-miss writes (see **`make -C test run-smoke-tras`**).
+
 Between some **AR** issues and between back-to-back **R** (or **B**) drains, the testbench inserts a few **`axi_aclk`** waits so **Icarus** simulation stays consistent with the gray **async FIFO** first-word-fall-through read path across **CDC** (tight back-to-back handshakes can otherwise show a wrong ID or a repeated beat in this environment).
 
-**CI:** **`make -C test ci`** runs the main testbench, **`tb_param_smoke`**, **`tb_param_smoke_zcycles`** ( **`MC_T_RP`/`MC_T_RCD`/`MC_CL`/`DFI_WRITE_ACK_CYCLES` all **0** ), **`tb_param_smoke_refresh`** (**`MC_REFRESH_INTERVAL` > 0**, **PRE** on refresh walk), **elaboration-fail** checks (illegal parameters must print **`ERROR:`** and **`$finish`**), **Verilator** `--lint-only` on **`axi4_to_dfi_bridge.v`**, **`syn-check`** (**Yosys** on **`syn/yosys.ys`**), and **`formal-fifo`** (**Yosys** bounded BMC on **`formal/fifo_safety_top.sv`**); the Yosys targets are skipped if **`yosys`** is not installed (see **`.github/workflows/ci.yml`**).
+**CI:** **`make -C test ci`** runs the main testbench, **`tb_param_smoke`**, **`tb_param_smoke_zcycles`** ( **`MC_T_RP`/`MC_T_RCD`/`MC_CL`/`DFI_WRITE_ACK_CYCLES` all **0** ), **`tb_param_smoke_refresh`** (**`MC_REFRESH_INTERVAL` > 0**), **`tb_param_smoke_tras`** (**`MC_T_RAS`/`MC_T_WR`**), **elaboration-fail** checks (illegal parameters must print **`ERROR:`** and **`$finish`**), **Verilator** `--lint-only` on **`axi4_to_dfi_bridge.v`**, **`syn-check`** (**Yosys** on **`syn/yosys.ys`**), and **`formal-fifo`** (**Yosys** bounded BMC on **`formal/fifo_safety_top.sv`**); the Yosys targets are skipped if **`yosys`** is not installed (see **`.github/workflows/ci.yml`**).
 
 **Further hardening:** For stronger CDC ordering evidence than **Icarus** alone, re-verify **`async_fifo_gray`** with a second simulator, bounded formal, or a **registered read data path** designed together with **`rd_empty`** and the bridge’s **`wreq_snapshot` / `rreq_snapshot`** timing (a naive registered mux alone can deadlock or mis-`empty` without that co-design). See **README** roadmap for the ordered backlog.
 
@@ -204,6 +209,7 @@ Build and run: **`make -C test run`**; full automation: **`make -C test ci`** (s
 | 0.10 | README roadmap update (FIFO + formal + refresh ordering); **`make audit`** (**`ci`** + design PDF). |
 | 0.11 | Optional **`MC_REFRESH_INTERVAL`** refresh walk (all-bank **PRE** when due); **`syn-check`** in **`make ci`**; **`formal/README.md`** template; **`syn/constraints.sdc`** SDC hints; **`tb_param_smoke_refresh`**. |
 | 0.12 | **Yosys-only** bounded formal on **`async_fifo_gray`** via **`formal/fifo_safety_top.sv`** and **`make formal-fifo`**. |
+| 0.13 | **`MC_T_RAS`** / **`MC_T_WR`** per-bank **PRE** gating and **`ST_WAIT_PRE`**; **`tb_param_smoke_tras`**. |
 
 # Document control
 

@@ -17,7 +17,8 @@
 //  C_AXI_DATA_WIDTH/8 (checked at elaboration); no byte-lane adapter.
 // The dfi_clk domain includes an SDRAM-style open-page scheduler: per-bank
 // row tracking, PRE (wrong row or closed), ACT, then READ/WRITE CAS with
-// parameterized tRP, tRCD, and MC_CL. Optional all-bank refresh walk
+// parameterized tRP, tRCD, MC_T_RAS (ACT to PRE), MC_T_WR (WRITE CAS to PRE),
+// and MC_CL. Optional all-bank refresh walk
 // (MC_REFRESH_INTERVAL, default 0 = off) issues PRE on any open bank then
 // reloads the interval counter; multi-clock DFI phase buses (P0–P3) are not
 // implemented. dfi_act_n is low only during ACT; optional
@@ -185,6 +186,10 @@ module axi4_to_dfi_bridge #(
     parameter integer MC_ROW_BITS  = 14,
     parameter integer MC_T_RP      = 4,  // PRE to ACT
     parameter integer MC_T_RCD     = 4,  // ACT to READ/WRITE command
+    // Min dfi_clk cycles from ACT command to PRE (same bank). 0 = no extra wait.
+    parameter integer MC_T_RAS     = 0,
+    // Min dfi_clk cycles from WRITE CAS to PRE (same bank). 0 = no extra wait.
+    parameter integer MC_T_WR      = 0,
     parameter integer MC_CL        = 6,  // CAS to first read data (PHY should align)
     parameter integer MC_RD_DV_MAX = 16,  // cycles to wait for dfi_rddata_valid after CL
 
@@ -495,7 +500,8 @@ module axi4_to_dfi_bridge #(
             $display("ERROR: axi4_to_dfi_bridge: C_AXI_ID_WIDTH (%0d) must be >= 1", C_AXI_ID_WIDTH);
             $finish(1);
         end
-        if (MC_T_RP < 0 || MC_T_RCD < 0 || MC_CL < 0 || MC_RD_DV_MAX < 0 || DFI_WRITE_ACK_CYCLES < 0) begin
+        if (MC_T_RP < 0 || MC_T_RCD < 0 || MC_T_RAS < 0 || MC_T_WR < 0 || MC_CL < 0 || MC_RD_DV_MAX < 0 ||
+            DFI_WRITE_ACK_CYCLES < 0) begin
             $display("ERROR: axi4_to_dfi_bridge: MC timing and DFI_WRITE_ACK_CYCLES must be >= 0");
             $finish(1);
         end
@@ -521,7 +527,8 @@ module axi4_to_dfi_bridge #(
     localparam [3:0] ST_WAIT_DV  = 4'd9;
     localparam [3:0] ST_PULSE_R  = 4'd10;
     localparam [3:0] ST_RF_PRE   = 4'd11;
-    localparam [3:0] ST_RF_NEXT  = 4'd12;
+    localparam [3:0] ST_RF_NEXT   = 4'd12;
+    localparam [3:0] ST_WAIT_PRE  = 4'd13;
 
     reg wreq_rd_en_r;
     reg rreq_rd_en_r;
@@ -550,6 +557,10 @@ module axi4_to_dfi_bridge #(
     reg                      rf_active;
     reg [DFI_BANK_WIDTH-1:0] rf_bank;
     reg [31:0]               refresh_ctr;
+    reg                      mc_wait_rf;
+
+    reg [7:0]                bank_ras_cnt [0:NBANKS-1];
+    reg [7:0]                bank_wr_cnt [0:NBANKS-1];
 
     wire [C_AXI_ADDR_WIDTH-1:0] wreq_addr =
         wreq_snapshot[STROBE_W+C_AXI_DATA_WIDTH +: C_AXI_ADDR_WIDTH];
@@ -568,6 +579,48 @@ module axi4_to_dfi_bridge #(
     );
 
     wire mc_idle = (mc_state == ST_IDLE);
+
+    function bank_pre_ready;
+        input [DFI_BANK_WIDTH-1:0] b;
+        begin
+            bank_pre_ready = (MC_T_RAS == 0 || bank_ras_cnt[b] == 8'd0) &&
+                             (MC_T_WR == 0 || bank_wr_cnt[b] == 8'd0);
+        end
+    endfunction
+
+    wire [DFI_BANK_WIDTH-1:0] wreq_bank = wreq_addr[MC_COL_BITS+MC_ROW_BITS +: DFI_BANK_WIDTH];
+    wire [DFI_BANK_WIDTH-1:0] rreq_bank = rreq_snapshot[MC_COL_BITS+MC_ROW_BITS +: DFI_BANK_WIDTH];
+
+    // Per-bank ACT->PRE (tRAS) and WRITE CAS->PRE (tWR) on dfi_clk; see ST_WAIT_PRE.
+    genvar gi;
+    generate
+        for (gi = 0; gi < NBANKS; gi = gi + 1) begin : gen_bank_tim
+            always @(posedge dfi_clk or negedge dfi_rst_n) begin
+                if (!dfi_rst_n) begin
+                    bank_ras_cnt[gi] <= 8'd0;
+                    bank_wr_cnt[gi] <= 8'd0;
+                end else begin
+                    if ((mc_state == ST_ACT_CMD) && (mc_bank == gi)) begin
+                        bank_ras_cnt[gi] <= (MC_T_RAS == 0) ? 8'd0 : MC_T_RAS[7:0];
+                    end else if ((mc_state == ST_WR_CMD) && (mc_bank == gi)) begin
+                        bank_wr_cnt[gi] <= (MC_T_WR == 0) ? 8'd0 : MC_T_WR[7:0];
+                    end else if ((mc_state == ST_PRE_CMD) && (mc_bank == gi)) begin
+                        bank_ras_cnt[gi] <= 8'd0;
+                        bank_wr_cnt[gi] <= 8'd0;
+                    end else if ((mc_state == ST_RF_PRE) && (rf_bank == gi)) begin
+                        bank_ras_cnt[gi] <= 8'd0;
+                        bank_wr_cnt[gi] <= 8'd0;
+                    end else if (row_open_mask[gi] ||
+                                  ((mc_state == ST_WAIT_RCD) && (mc_bank == gi))) begin
+                        if (bank_ras_cnt[gi] != 8'd0)
+                            bank_ras_cnt[gi] <= bank_ras_cnt[gi] - 8'd1;
+                        if (bank_wr_cnt[gi] != 8'd0)
+                            bank_wr_cnt[gi] <= bank_wr_cnt[gi] - 8'd1;
+                    end
+                end
+            end
+        end
+    endgenerate
 
     // Block new FIFO pops while a refresh interval has expired (until walk completes).
     wire rf_block_fifo = (MC_REFRESH_INTERVAL > 0) && (refresh_ctr == 32'd0) && !rf_active;
@@ -763,6 +816,7 @@ module axi4_to_dfi_bridge #(
             rf_active        <= 1'b0;
             rf_bank          <= {DFI_BANK_WIDTH{1'b0}};
             refresh_ctr      <= (MC_REFRESH_INTERVAL > 0) ? MC_REFRESH_INTERVAL[31:0] : 32'd0;
+            mc_wait_rf       <= 1'b0;
             for (open_row_rst_i = 0; open_row_rst_i < NBANKS; open_row_rst_i = open_row_rst_i + 1)
                 open_row_mem[open_row_rst_i] <= {MC_ROW_BITS{1'b0}};
         end else begin
@@ -805,7 +859,13 @@ module axi4_to_dfi_bridge #(
                                      wreq_addr[MC_COL_BITS +: MC_ROW_BITS]) begin
                             mc_after_rp  <= ST_ACT_CMD;
                             mc_after_rcd <= ST_WR_CMD;
-                            mc_state     <= ST_PRE_CMD;
+                            if (bank_pre_ready(wreq_bank)) begin
+                                mc_state   <= ST_PRE_CMD;
+                                mc_wait_rf <= 1'b0;
+                            end else begin
+                                mc_state   <= ST_WAIT_PRE;
+                                mc_wait_rf <= 1'b0;
+                            end
                         end else
                             mc_state <= ST_WR_CMD;
                     end else if (rreq_rd_en_r) begin
@@ -822,7 +882,13 @@ module axi4_to_dfi_bridge #(
                                      rreq_snapshot[MC_COL_BITS +: MC_ROW_BITS]) begin
                             mc_after_rp  <= ST_ACT_CMD;
                             mc_after_rcd <= ST_RD_CMD;
-                            mc_state     <= ST_PRE_CMD;
+                            if (bank_pre_ready(rreq_bank)) begin
+                                mc_state   <= ST_PRE_CMD;
+                                mc_wait_rf <= 1'b0;
+                            end else begin
+                                mc_state   <= ST_WAIT_PRE;
+                                mc_wait_rf <= 1'b0;
+                            end
                         end else
                             mc_state <= ST_RD_CMD;
                     end else if ((MC_REFRESH_INTERVAL > 0) && !rf_active && dfi_mc_ready &&
@@ -954,16 +1020,32 @@ module axi4_to_dfi_bridge #(
                         mc_state <= ST_WAIT_RP;
                     end
                 end
+                ST_WAIT_PRE: begin
+                    if (mc_wait_rf) begin
+                        if (bank_pre_ready(rf_bank))
+                            mc_state <= ST_RF_PRE;
+                    end else begin
+                        if (bank_pre_ready(mc_bank))
+                            mc_state <= ST_PRE_CMD;
+                    end
+                end
                 ST_RF_NEXT: begin
-                    if (row_open_mask[rf_bank])
-                        mc_state <= ST_RF_PRE;
-                    else if (rf_bank == {DFI_BANK_WIDTH{1'b1}}) begin
+                    if (row_open_mask[rf_bank]) begin
+                        if (bank_pre_ready(rf_bank))
+                            mc_state <= ST_RF_PRE;
+                        else begin
+                            mc_state   <= ST_WAIT_PRE;
+                            mc_wait_rf <= 1'b1;
+                        end
+                    end else if (rf_bank == {DFI_BANK_WIDTH{1'b1}}) begin
                         rf_active   <= 1'b0;
                         refresh_ctr <= MC_REFRESH_INTERVAL[31:0];
+                        mc_wait_rf  <= 1'b0;
                         mc_state    <= ST_IDLE;
                     end else begin
-                        rf_bank  <= rf_bank + 1'b1;
-                        mc_state <= ST_RF_NEXT;
+                        rf_bank    <= rf_bank + 1'b1;
+                        mc_wait_rf <= 1'b0;
+                        mc_state   <= ST_RF_NEXT;
                     end
                 end
                 default: mc_state <= ST_IDLE;

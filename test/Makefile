@@ -10,6 +10,7 @@
 #   run-smoke  Compile tb_param_smoke (CDC_FIFO_DEPTH=16) and run
 #   run-smoke-zc  tb_param_smoke_zcycles (zero MC/PHY timing waits + row change)
 #   run-smoke-refresh  tb_param_smoke_refresh (MC_REFRESH_INTERVAL>0, PRE on walk)
+#   run-smoke-tras  tb_param_smoke_tras (MC_T_RAS / MC_T_WR > 0, row-miss write)
 #   elab-fail-*  Expect ERROR: from parameter guards (see tb_elab_fail.v)
 #   lint-verilator  Verilator --lint-only on bridge RTL (optional tool)
 #   syn-check  Yosys hierarchy/opt on ../syn/yosys.ys (skip if yosys not in PATH)
@@ -37,6 +38,9 @@ SMOKE_ZC_SRC := $(SRC_DIR)/axi4_to_dfi_bridge.v $(SRC_DIR)/tb_param_smoke_zcycle
 SMOKE_RF_TOP := tb_param_smoke_refresh
 SMOKE_RF_SIM := $(BUILD_DIR)/smoke_refresh.vvp
 SMOKE_RF_SRC := $(SRC_DIR)/axi4_to_dfi_bridge.v $(SRC_DIR)/tb_param_smoke_refresh.v
+SMOKE_TRAS_TOP := tb_param_smoke_tras
+SMOKE_TRAS_SIM := $(BUILD_DIR)/smoke_tras.vvp
+SMOKE_TRAS_SRC := $(SRC_DIR)/axi4_to_dfi_bridge.v $(SRC_DIR)/tb_param_smoke_tras.v
 ELAB_FAIL_SRC := $(SRC_DIR)/axi4_to_dfi_bridge.v $(SRC_DIR)/tb_elab_fail.v
 
 IVERILOG  := iverilog
@@ -46,24 +50,25 @@ VERILATOR := verilator
 # Lint-only: waive width/unused on this Verilog-2001 bridge (AXI tie-offs, FIFO PTRW ternary).
 VERILINT  := $(VERILATOR) --lint-only -Wall -Wno-DECLFILENAME -Wno-WIDTH -Wno-UNUSED
 
-.PHONY: all build run test run-smoke run-smoke-zc run-smoke-refresh \
+.PHONY: all build run test run-smoke run-smoke-zc run-smoke-refresh run-smoke-tras \
 	elab-fail-width elab-fail-depth elab-fail-addrmap elab-fail-fifo elab-fail-all \
 	lint-verilator syn-check formal-fifo ci vcd wave clean help doc doc-html
 
 all: run
 
 help:
-	@echo "Targets: build run test run-smoke run-smoke-zc run-smoke-refresh elab-fail-* elab-fail-all lint-verilator syn-check formal-fifo ci vcd wave doc doc-html clean help"
+	@echo "Targets: build run test run-smoke run-smoke-zc run-smoke-refresh run-smoke-tras elab-fail-* elab-fail-all lint-verilator syn-check formal-fifo ci vcd wave doc doc-html clean help"
 	@echo "  build  - compile to $(SIM)"
 	@echo "  run    - compile (if needed) and run tests"
 	@echo "  run-smoke - compile $(SMOKE_SIM) and run tb_param_smoke"
 	@echo "  run-smoke-zc - zero-cycle MC timing + row-miss smoke ($(SMOKE_ZC_SIM))"
 	@echo "  run-smoke-refresh - MC_REFRESH_INTERVAL + refresh PRE ($(SMOKE_RF_SIM))"
+	@echo "  run-smoke-tras - MC_T_RAS / MC_T_WR row-miss ($(SMOKE_TRAS_SIM))"
 	@echo "  elab-fail-all - four illegal configs must print ERROR: and finish"
 	@echo "  lint-verilator - Verilator lint on $(SRC_DIR)/axi4_to_dfi_bridge.v (skip if no verilator)"
 	@echo "  syn-check - Yosys on ../syn/yosys.ys (skip if no yosys)"
 	@echo "  formal-fifo - Yosys BMC on async_fifo_gray wrapper (skip if no yosys)"
-	@echo "  ci     - run + smokes + elab-fail-all + lint + syn-check + formal-fifo"
+	@echo "  ci     - run + smokes (incl. tras) + elab-fail-all + lint + syn-check + formal-fifo"
 	@echo "  vcd    - run tests and write $(VCD) (open with gtkwave)"
 	@echo "  wave   - vcd + gtkwave $(VCD)"
 	@echo "  doc    - PDF from $(DOC_DIR)/DESIGN_SPEC.md (requires pandoc + pdflatex)"
@@ -101,6 +106,13 @@ $(SMOKE_RF_SIM): $(SMOKE_RF_SRC)
 
 run-smoke-refresh: $(SMOKE_RF_SIM)
 	$(VVP) $(SMOKE_RF_SIM)
+
+$(SMOKE_TRAS_SIM): $(SMOKE_TRAS_SRC)
+	mkdir -p $(dir $@)
+	$(IVERILOG) $(IVERFLAGS) -o $@ -s $(SMOKE_TRAS_TOP) $(SMOKE_TRAS_SRC)
+
+run-smoke-tras: $(SMOKE_TRAS_SIM)
+	$(VVP) $(SMOKE_TRAS_SIM)
 
 elab-fail-width: $(ELAB_FAIL_SRC)
 	mkdir -p $(BUILD_DIR)
@@ -150,7 +162,7 @@ formal-fifo:
 		echo "SKIP: yosys not in PATH"; \
 	fi
 
-ci: run run-smoke run-smoke-zc run-smoke-refresh elab-fail-all lint-verilator syn-check formal-fifo
+ci: run run-smoke run-smoke-zc run-smoke-refresh run-smoke-tras elab-fail-all lint-verilator syn-check formal-fifo
 
 vcd: $(SIM)
 	$(VVP) $(SIM) +vcd
