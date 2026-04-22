@@ -633,14 +633,13 @@ module axi4_to_dfi_bridge #(
 
     // Block new FIFO pops while a refresh interval has expired (until walk completes).
     wire rf_block_fifo = (MC_REFRESH_INTERVAL > 0) && (refresh_ctr == 32'd0) && !rf_active;
+    wire bresp_full;
+    wire rresp_full;
 
     assign wreq_rd_en = dfi_mc_ready && mc_idle && !rf_block_fifo && !rf_active &&
                         !wreq_rd_en_r && !rreq_rd_en_r && !wreq_empty && !bresp_full;
     assign rreq_rd_en = dfi_mc_ready && mc_idle && !rf_block_fifo && !rf_active &&
                         !wreq_rd_en_r && !rreq_rd_en_r && wreq_empty && !rreq_empty && !rresp_full;
-
-    wire bresp_full;
-    wire rresp_full;
 
     wire bresp_wr_en = (mc_state == ST_WAIT_B) && (mc_ctr == 8'd1) && !bresp_full &&
                        mc_wr_last_beat;

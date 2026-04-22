@@ -43,8 +43,8 @@ SMOKE_TRAS_SIM := $(BUILD_DIR)/smoke_tras.vvp
 SMOKE_TRAS_SRC := $(SRC_DIR)/axi4_to_dfi_bridge.v $(SRC_DIR)/tb_param_smoke_tras.v
 ELAB_FAIL_SRC := $(SRC_DIR)/axi4_to_dfi_bridge.v $(SRC_DIR)/tb_elab_fail.v
 
-IVERILOG  := iverilog
-VVP       := vvp
+IVERILOG  := $(shell command -v iverilog)
+VVP       := $(or $(shell command -v vvp 2>/dev/null),$(dir $(IVERILOG))vvp)
 IVERFLAGS := -g2001 -Wall
 VERILATOR := verilator
 # Lint-only: waive width/unused on this Verilog-2001 bridge (AXI tie-offs, FIFO PTRW ternary).
@@ -82,7 +82,7 @@ $(SIM): $(SOURCES)
 	mkdir -p $(dir $@)
 	$(IVERILOG) $(IVERFLAGS) -o $(SIM) $(SOURCES)
 
-run: $(SIM)
+run: build
 	$(VVP) $(SIM)
 
 test: run
@@ -181,7 +181,7 @@ formal-fifo:
 
 ci: run run-smoke run-smoke-zc run-smoke-refresh run-smoke-tras elab-fail-all lint-verilator syn-check formal-fifo
 
-vcd: $(SIM)
+vcd: build
 	$(VVP) $(SIM) +vcd
 	@echo "VCD: $(VCD)  (gtkwave $(VCD))"
 

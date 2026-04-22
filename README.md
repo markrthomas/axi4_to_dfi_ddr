@@ -71,6 +71,8 @@ make -C test wave
 
 Continuous integration: **`.github/workflows/ci.yml`** runs **`make -C test ci`** on push and pull request to **`main`** (installs **iverilog** and **verilator** on Ubuntu).
 
+The `test/Makefile` now recompiles before `run` / `vcd`, which avoids stale `sim.vvp` artifacts when your active `iverilog` / `vvp` toolchain changes between sessions.
+
 Generated simulation artifacts live under **`test/build/`** (ignored by git).
 
 The default **`make run`** test sequence is summarized in **`doc/DESIGN_SPEC.md`** (section **Verification**): init gating, illegal transactions and read-data timeout (**SLVERR**), **B**/**R** stall stability, filling the **gray async** response FIFOs while **RREADY**/**BREADY** are low, dual outstanding reads with different **ARID**, DFI-side **PRE/ACT/CAS** checks, and a deterministic **LFSR**-paced stress phase (writes then reads; see spec). The bench spaces some **AXI** handshakes slightly for reliable **Icarus** + **CDC** behavior.
