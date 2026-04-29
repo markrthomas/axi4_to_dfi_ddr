@@ -543,6 +543,33 @@ module tb;
         end
     endtask
 
+    task axi_write_illegal_fixed_single;
+        input [C_AXI_ADDR_WIDTH-1:0] addr;
+        input [C_AXI_ID_WIDTH-1:0]     id;
+        input [C_AXI_DATA_WIDTH-1:0]   data;
+        begin
+            s_axi_awid     = id;
+            s_axi_awaddr   = addr;
+            s_axi_awlen    = 8'd0;
+            s_axi_awburst  = 2'b00;
+            s_axi_awvalid  = 1'b1;
+            @(posedge axi_aclk);
+            while (!s_axi_awready)
+                @(posedge axi_aclk);
+            s_axi_awvalid  = 1'b0;
+
+            s_axi_wdata   = data;
+            s_axi_wstrb   = 8'hFF;
+            s_axi_wlast   = 1'b1;
+            s_axi_wvalid  = 1'b1;
+            @(posedge axi_aclk);
+            while (!s_axi_wready)
+                @(posedge axi_aclk);
+            s_axi_wvalid  = 1'b0;
+            s_axi_awburst = 2'b01;
+        end
+    endtask
+
     task axi_wait_b;
         input [C_AXI_ID_WIDTH-1:0] exp_id;
         begin
@@ -558,6 +585,29 @@ module tb;
             end
             s_axi_bready = 1'b1;
             @(posedge axi_aclk);
+            // Let response FIFO nonblocking updates expose any prefetched next beat.
+            #1;
+            s_axi_bready = 1'b0;
+        end
+    endtask
+
+    task axi_wait_b_slverr;
+        input [C_AXI_ID_WIDTH-1:0] exp_id;
+        begin
+            while (!s_axi_bvalid)
+                @(posedge axi_aclk);
+            if (s_axi_bid !== exp_id) begin
+                $display("FAIL: SLVERR BID mismatch exp %h got %h", exp_id, s_axi_bid);
+                errors = errors + 1;
+            end
+            if (s_axi_bresp !== 2'b10) begin
+                $display("FAIL: SLVERR BRESP exp 10 got %b", s_axi_bresp);
+                errors = errors + 1;
+            end
+            s_axi_bready = 1'b1;
+            @(posedge axi_aclk);
+            // Let response FIFO nonblocking updates expose any prefetched next beat.
+            #1;
             s_axi_bready = 1'b0;
         end
     endtask
@@ -592,6 +642,8 @@ module tb;
             end
             s_axi_bready = 1'b1;
             @(posedge axi_aclk);
+            // Let response FIFO nonblocking updates expose any prefetched next beat.
+            #1;
             s_axi_bready = 1'b0;
             while (s_axi_bvalid && (s_axi_bid === held_bid))
                 @(posedge axi_aclk);
@@ -613,6 +665,22 @@ module tb;
                 @(posedge axi_aclk);
             tb_push_read_addr(s_axi_araddr);
             s_axi_arvalid = 1'b0;
+        end
+    endtask
+
+    task axi_read_illegal_size;
+        input [C_AXI_ADDR_WIDTH-1:0] addr;
+        input [C_AXI_ID_WIDTH-1:0]     id;
+        begin
+            s_axi_arid    = id;
+            s_axi_araddr  = addr;
+            s_axi_arsize  = 3'd2;
+            s_axi_arvalid = 1'b1;
+            @(posedge axi_aclk);
+            while (!s_axi_arready)
+                @(posedge axi_aclk);
+            s_axi_arvalid = 1'b0;
+            s_axi_arsize  = AXI_SIZE_FULL;
         end
     endtask
 
@@ -640,6 +708,8 @@ module tb;
             end
             s_axi_rready = 1'b1;
             @(posedge axi_aclk);
+            // Let response FIFO nonblocking updates expose any prefetched next beat.
+            #1;
             s_axi_rready = 1'b0;
         end
     endtask
@@ -668,6 +738,8 @@ module tb;
             end
             s_axi_rready = 1'b1;
             @(posedge axi_aclk);
+            // Let response FIFO nonblocking updates expose any prefetched next beat.
+            #1;
             s_axi_rready = 1'b0;
         end
     endtask
@@ -726,6 +798,8 @@ module tb;
             end
             s_axi_rready = 1'b1;
             @(posedge axi_aclk);
+            // Let response FIFO nonblocking updates expose any prefetched next beat.
+            #1;
             s_axi_rready = 1'b0;
             while (s_axi_rvalid && (s_axi_rid === held_rid) && (s_axi_rdata === held_rdata))
                 @(posedge axi_aclk);
@@ -936,8 +1010,7 @@ module tb;
         tb_read_model_rst = 1'b0;
         repeat (10) @(posedge axi_aclk);
 
-        // Unrolled. Space AR issues and R/B drains on axi_aclk: back-to-back handshakes
-        // plus async_fifo read NBAs vs channel assigns can mis-order beats in iverilog.
+        // Unrolled. Space AR issues to keep command issue order easy to inspect.
         axi_read_single(tb_mc_addr(3'd6, 14'd200, 10'd0), 4'h0);
         repeat (2) @(posedge axi_aclk);
         axi_read_single(tb_mc_addr(3'd6, 14'd200, 10'd8), 4'h1);
@@ -956,19 +1029,12 @@ module tb;
         tb_wait_dfi_mc(2500);
 
         axi_wait_r(4'h0, expected_rdata(tb_mc_addr(3'd6, 14'd200, 10'd0)));
-        repeat (6) @(posedge axi_aclk);
         axi_wait_r(4'h1, expected_rdata(tb_mc_addr(3'd6, 14'd200, 10'd8)));
-        repeat (6) @(posedge axi_aclk);
         axi_wait_r(4'h2, expected_rdata(tb_mc_addr(3'd6, 14'd200, 10'd16)));
-        repeat (6) @(posedge axi_aclk);
         axi_wait_r(4'h3, expected_rdata(tb_mc_addr(3'd6, 14'd200, 10'd24)));
-        repeat (6) @(posedge axi_aclk);
         axi_wait_r(4'h4, expected_rdata(tb_mc_addr(3'd6, 14'd200, 10'd32)));
-        repeat (6) @(posedge axi_aclk);
         axi_wait_r(4'h5, expected_rdata(tb_mc_addr(3'd6, 14'd200, 10'd40)));
-        repeat (6) @(posedge axi_aclk);
         axi_wait_r(4'h6, expected_rdata(tb_mc_addr(3'd6, 14'd200, 10'd48)));
-        repeat (6) @(posedge axi_aclk);
         axi_wait_r(4'h7, expected_rdata(tb_mc_addr(3'd6, 14'd200, 10'd56)));
 
         // --- Test 10: BRESP async FIFO (depth 8) backs up with BREADY low; drain in completion order ---
@@ -993,19 +1059,12 @@ module tb;
         tb_wait_dfi_mc(2500);
 
         axi_wait_b(4'h0);
-        repeat (6) @(posedge axi_aclk);
         axi_wait_b(4'h1);
-        repeat (6) @(posedge axi_aclk);
         axi_wait_b(4'h2);
-        repeat (6) @(posedge axi_aclk);
         axi_wait_b(4'h3);
-        repeat (6) @(posedge axi_aclk);
         axi_wait_b(4'h4);
-        repeat (6) @(posedge axi_aclk);
         axi_wait_b(4'h5);
-        repeat (6) @(posedge axi_aclk);
         axi_wait_b(4'h6);
-        repeat (6) @(posedge axi_aclk);
         axi_wait_b(4'h7);
 
         // --- Test 11: illegal INCR read with ARLEN != 0 -> SLVERR (no rreq / PHY queue entry) ---
@@ -1036,10 +1095,31 @@ module tb;
         axi_read_single(tb_mc_addr(3'd1, 14'd10, 10'd8), 4'hC);
         tb_wait_dfi_mc(256);
         axi_wait_r(4'hA, expected_rdata(tb_mc_addr(3'd1, 14'd10, 10'd0)));
-        repeat (6) @(posedge axi_aclk);
         axi_wait_r(4'hC, expected_rdata(tb_mc_addr(3'd1, 14'd10, 10'd8)));
 
-        // --- Test 13: LFSR stress (writes and reads in separate phases).
+        // --- Test 13: same-ID legal response must precede later local SLVERR ---
+        tb_flush_axi_rsp;
+        s_axi_bready = 1'b0;
+        s_axi_rready = 1'b0;
+        tb_clear_read_addr_q;
+        tb_read_model_rst = 1'b1;
+        repeat (12) @(posedge dfi_clk);
+        tb_read_model_rst = 1'b0;
+        repeat (10) @(posedge axi_aclk);
+
+        axi_write_single(tb_mc_addr(3'd0, 14'd300, 10'd0), 4'h9, 64'h0BADBEEF_00000001, 8'hFF);
+        axi_write_illegal_fixed_single(tb_mc_addr(3'd0, 14'd300, 10'd8), 4'h9, 64'h0BADBEEF_00000002);
+        axi_wait_b(4'h9);
+        repeat (2) @(posedge axi_aclk);
+        axi_wait_b_slverr(4'h9);
+
+        axi_read_single(tb_mc_addr(3'd0, 14'd301, 10'd0), 4'hA);
+        axi_read_illegal_size(tb_mc_addr(3'd0, 14'd301, 10'd8), 4'hA);
+        axi_wait_r(4'hA, expected_rdata(tb_mc_addr(3'd0, 14'd301, 10'd0)));
+        repeat (2) @(posedge axi_aclk);
+        axi_wait_r_slverr(4'hA);
+
+        // --- Test 14: LFSR stress (writes and reads in separate phases).
         //     DUT gives wreq priority over rreq (reads only start when wreq is empty),
         //     so interleaved AR/AW would not preserve AR-order == R-order vs scoreboard.
         tb_flush_axi_rsp;
@@ -1091,13 +1171,12 @@ module tb;
         tb_wait_dfi_mc(2500);
         for (tb_rs_op = 0; tb_rs_op < tb_rs_pr; tb_rs_op = tb_rs_op + 1) begin
             axi_wait_r(tb_rs_rid[tb_rs_op], expected_rdata(tb_rs_raddr[tb_rs_op]));
-            repeat (6) @(posedge axi_aclk);
         end
 
         repeat (20) @(posedge axi_aclk);
 
         if (errors == 0)
-            $display("PASS: tb_axi4_to_dfi_bridge (FIFO + SLVERR + timeout + stress + MC checks)");
+            $display("PASS: tb_axi4_to_dfi_bridge (FIFO + SLVERR ordering + timeout + stress + MC checks)");
         else
             $display("FAIL: tb_axi4_to_dfi_bridge errors=%0d", errors);
         $finish;

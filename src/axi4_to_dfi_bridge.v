@@ -52,6 +52,8 @@ endmodule
 
 //-----------------------------------------------------------------------------
 // Gray-code async FIFO (Cliff Cummings style; power-of-2 DEPTH)
+// Read side presents a registered word: !rd_empty means rd_data is stable until
+// rd_en consumes it. The next word is prefetched on the read clock when present.
 //-----------------------------------------------------------------------------
 module async_fifo_gray #(
     parameter integer WIDTH  = 8,
@@ -101,7 +103,8 @@ module async_fifo_gray #(
     wire [PTRW-1:0] rptr_gray_wr;
 
     wire [PTRW-1:0] wptr_gray_next = bin2gray(wptr_bin + 1'b1);
-    wire [PTRW-1:0] rptr_gray_next = bin2gray(rptr_bin + 1'b1);
+    wire [PTRW-1:0] rptr_bin_next  = rptr_bin + 1'b1;
+    wire [PTRW-1:0] rptr_gray_next = bin2gray(rptr_bin_next);
 
     wire [PTRW-1:0] wptr_full_cmp =
         (PTRW > 2) ? {~rptr_gray_wr[PTRW-1:PTRW-2], rptr_gray_wr[PTRW-3:0]} :
@@ -109,11 +112,15 @@ module async_fifo_gray #(
     wire full_int = (wptr_gray_next == wptr_full_cmp);
     assign wr_full = full_int;
 
-    wire empty_int = (wptr_gray_rd == rptr_gray);
-    assign rd_empty = empty_int;
+    reg [WIDTH-1:0] rd_data_q;
+    reg             rd_valid_q;
 
-    // First-word fall-through: data valid whenever !empty (matches AXI-style valid/data).
-    assign rd_data = empty_int ? {WIDTH{1'b0}} : mem[rptr_bin[AW-1:0]];
+    wire rd_have_cur  = (wptr_gray_rd != rptr_gray);
+    wire rd_have_next = (wptr_gray_rd != rptr_gray_next);
+    wire rd_pop       = rd_en && rd_valid_q;
+
+    assign rd_empty = !rd_valid_q;
+    assign rd_data  = rd_valid_q ? rd_data_q : {WIDTH{1'b0}};
 
     always @(posedge wr_clk or negedge wr_rst_n) begin
         if (!wr_rst_n) begin
@@ -130,10 +137,22 @@ module async_fifo_gray #(
         if (!rd_rst_n) begin
             rptr_bin  <= {PTRW{1'b0}};
             rptr_gray <= {PTRW{1'b0}};
+            rd_data_q <= {WIDTH{1'b0}};
+            rd_valid_q <= 1'b0;
         end else begin
-            if (rd_en && !empty_int) begin
-                rptr_bin  <= rptr_bin + 1'b1;
+            if (rd_pop) begin
+                rptr_bin  <= rptr_bin_next;
                 rptr_gray <= rptr_gray_next;
+                if (rd_have_next) begin
+                    rd_data_q  <= mem[rptr_bin_next[AW-1:0]];
+                    rd_valid_q <= 1'b1;
+                end else begin
+                    rd_data_q  <= {WIDTH{1'b0}};
+                    rd_valid_q <= 1'b0;
+                end
+            end else if (!rd_valid_q && rd_have_cur) begin
+                rd_data_q  <= mem[rptr_bin[AW-1:0]];
+                rd_valid_q <= 1'b1;
             end
         end
     end
@@ -367,8 +386,17 @@ module axi4_to_dfi_bridge #(
 
     reg bresp_err_valid;
     reg [C_AXI_ID_WIDTH-1:0] bresp_err_id;
+    reg bresp_err_pending;
+    reg [C_AXI_ID_WIDTH-1:0] bresp_err_pending_id;
     reg rresp_err_valid;
     reg [C_AXI_ID_WIDTH-1:0] rresp_err_id;
+    reg rresp_err_pending;
+    reg [C_AXI_ID_WIDTH-1:0] rresp_err_pending_id;
+
+    // Legal responses can return later from the DFI domain. Keep local decode
+    // errors pending until older legal same-channel responses have drained.
+    reg [15:0] b_legal_outstanding;
+    reg [15:0] r_legal_outstanding;
 
     reg write_err_active;
     reg write_err_wait_last;
@@ -414,8 +442,9 @@ module axi4_to_dfi_bridge #(
                           ((write_err_wait_last && s_axi_wlast) ||
                            (!write_err_wait_last && (write_err_beats_left == 8'd1)));
 
-    assign s_axi_awready = !aw_hold_valid && !write_err_active && !bresp_err_valid;
-    assign s_axi_wready  = !w_hold_valid && !bresp_err_valid;
+    assign s_axi_awready = !aw_hold_valid && !write_err_active &&
+                           !bresp_err_valid && !bresp_err_pending;
+    assign s_axi_wready  = !w_hold_valid && !bresp_err_valid && !bresp_err_pending;
     async_fifo_gray #(
         .WIDTH (WREQ_W),
         .DEPTH (CDC_FIFO_DEPTH)
@@ -435,7 +464,7 @@ module axi4_to_dfi_bridge #(
     wire rreq_wr_en = s_axi_arvalid && s_axi_arready && ar_ok;
     wire [RREQ_W-1:0] rreq_push = {s_axi_arid, s_axi_araddr};
 
-    assign s_axi_arready = ar_ok ? !rreq_full : !rresp_err_valid;
+    assign s_axi_arready = ar_ok ? !rreq_full : (!rresp_err_valid && !rresp_err_pending);
 
     async_fifo_gray #(
         .WIDTH (RREQ_W),
@@ -717,31 +746,69 @@ module axi4_to_dfi_bridge #(
             w_hold_last   <= 1'b0;
             bresp_err_valid <= 1'b0;
             bresp_err_id    <= {C_AXI_ID_WIDTH{1'b0}};
+            bresp_err_pending <= 1'b0;
+            bresp_err_pending_id <= {C_AXI_ID_WIDTH{1'b0}};
             rresp_err_valid <= 1'b0;
             rresp_err_id    <= {C_AXI_ID_WIDTH{1'b0}};
+            rresp_err_pending <= 1'b0;
+            rresp_err_pending_id <= {C_AXI_ID_WIDTH{1'b0}};
+            b_legal_outstanding <= 16'd0;
+            r_legal_outstanding <= 16'd0;
             write_err_active    <= 1'b0;
             write_err_wait_last <= 1'b0;
             write_err_beats_left <= 8'd0;
             write_err_id        <= {C_AXI_ID_WIDTH{1'b0}};
             w_axi_beat_idx      <= 8'd0;
         end else begin
+            case ({(wreq_wr_en && w_pair_last), bresp_rd_en})
+                2'b10: b_legal_outstanding <= b_legal_outstanding + 16'd1;
+                2'b01: b_legal_outstanding <= b_legal_outstanding - 16'd1;
+                default: ;
+            endcase
+
+            case ({rreq_wr_en, rresp_rd_en})
+                2'b10: r_legal_outstanding <= r_legal_outstanding + 16'd1;
+                2'b01: r_legal_outstanding <= r_legal_outstanding - 16'd1;
+                default: ;
+            endcase
+
             if (bresp_err_valid && s_axi_bready)
                 bresp_err_valid <= 1'b0;
+            else if (!bresp_err_valid && bresp_err_pending && (b_legal_outstanding == 16'd0)) begin
+                bresp_err_valid     <= 1'b1;
+                bresp_err_id        <= bresp_err_pending_id;
+                bresp_err_pending   <= 1'b0;
+            end
 
             if (rresp_err_valid && s_axi_rready)
                 rresp_err_valid <= 1'b0;
+            else if (!rresp_err_valid && rresp_err_pending && (r_legal_outstanding == 16'd0)) begin
+                rresp_err_valid     <= 1'b1;
+                rresp_err_id        <= rresp_err_pending_id;
+                rresp_err_pending   <= 1'b0;
+            end
 
-            if (ar_fire && !ar_ok && !rresp_err_valid) begin
-                rresp_err_valid <= 1'b1;
-                rresp_err_id    <= s_axi_arid;
+            if (ar_fire && !ar_ok && !rresp_err_valid && !rresp_err_pending) begin
+                if (r_legal_outstanding == 16'd0) begin
+                    rresp_err_valid <= 1'b1;
+                    rresp_err_id    <= s_axi_arid;
+                end else begin
+                    rresp_err_pending    <= 1'b1;
+                    rresp_err_pending_id <= s_axi_arid;
+                end
             end
 
             if (write_err_done) begin
                 write_err_active     <= 1'b0;
                 write_err_wait_last  <= 1'b0;
                 write_err_beats_left <= 8'd0;
-                bresp_err_valid      <= 1'b1;
-                bresp_err_id         <= write_err_id;
+                if (b_legal_outstanding == 16'd0) begin
+                    bresp_err_valid  <= 1'b1;
+                    bresp_err_id     <= write_err_id;
+                end else begin
+                    bresp_err_pending    <= 1'b1;
+                    bresp_err_pending_id <= write_err_id;
+                end
             end else if (write_err_active && w_fire && !write_err_wait_last &&
                          (write_err_beats_left != 8'd0)) begin
                 write_err_beats_left <= write_err_beats_left - 8'd1;
@@ -756,8 +823,13 @@ module axi4_to_dfi_bridge #(
                     write_err_beats_left <= (aw_pair_len != 8'd0) ? aw_pair_len : 8'd0;
                     write_err_id        <= aw_pair_id;
                 end else begin
-                    bresp_err_valid <= 1'b1;
-                    bresp_err_id    <= aw_pair_id;
+                    if (b_legal_outstanding == 16'd0) begin
+                        bresp_err_valid <= 1'b1;
+                        bresp_err_id    <= aw_pair_id;
+                    end else begin
+                        bresp_err_pending    <= 1'b1;
+                        bresp_err_pending_id <= aw_pair_id;
+                    end
                 end
             end else begin
                 if (aw_fire) begin

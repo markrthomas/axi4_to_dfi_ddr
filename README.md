@@ -19,6 +19,7 @@ This repository is a practical starting point for simulation and integration. Th
 | `test/Makefile` | Simulation: **iverilog**/**vvp**, **`run-smoke*`** (incl. **`run-smoke-tras`**), **`lint-verilator`**, **`syn-check`**, **`formal-fifo`**, **`ci`**; VCD/**gtkwave**; `doc` / `doc-html` wrappers |
 | `.github/workflows/ci.yml` | **GitHub Actions**: **`make -C test ci`** on **main** |
 | `doc/DESIGN_SPEC.md` | Design specification (source for PDF/HTML) |
+| `doc/FULL_FUNCTIONALITY_PLAN.md` | Roadmap from the current bridge to full AXI/DFI/DDR functionality and verification closure |
 | `doc/Makefile` | `pdf`, `html`, `clean` (outputs under `doc/build/`) |
 | `syn/yosys.ys` | Optional **Yosys** elaboration/synthesis sanity script for the bridge top |
 | `syn/constraints.sdc` | Commented **SDC** hints (CDC false paths); not read by Yosys script |
@@ -75,11 +76,11 @@ The `test/Makefile` now recompiles before `run` / `vcd`, which avoids stale `sim
 
 Generated simulation artifacts live under **`test/build/`** (ignored by git).
 
-The default **`make run`** test sequence is summarized in **`doc/DESIGN_SPEC.md`** (section **Verification**): init gating, illegal transactions and read-data timeout (**SLVERR**), **B**/**R** stall stability, filling the **gray async** response FIFOs while **RREADY**/**BREADY** are low, dual outstanding reads with different **ARID**, DFI-side **PRE/ACT/CAS** checks, and a deterministic **LFSR**-paced stress phase (writes then reads; see spec). The bench spaces some **AXI** handshakes slightly for reliable **Icarus** + **CDC** behavior.
+The default **`make run`** test sequence is summarized in **`doc/DESIGN_SPEC.md`** (section **Verification**): init gating, illegal transactions and read-data timeout (**SLVERR**), same-ID legal-before-local-SLVERR ordering, **B**/**R** stall stability, filling the **registered-read gray async** response FIFOs while **RREADY**/**BREADY** are low, dual outstanding reads with different **ARID**, DFI-side **PRE/ACT/CAS** checks, and a deterministic **LFSR**-paced stress phase (writes then reads; see spec).
 
 ## Documentation (design spec)
 
-Source: **`doc/DESIGN_SPEC.md`**. Outputs go to **`doc/build/`** (ignored by git).
+Source: **`doc/DESIGN_SPEC.md`**. Outputs go to **`doc/build/`** (ignored by git). The broader implementation and verification roadmap is tracked in **`doc/FULL_FUNCTIONALITY_PLAN.md`**.
 
 ```bash
 # From repo root
@@ -135,7 +136,8 @@ Exact bus widths are **parameters** on `axi4_to_dfi_bridge` (default 32-bit AXI 
 - **Clocks**: `axi_aclk` / `axi_aresetn` for AXI; `dfi_clk` / `dfi_rst_n` for DFI-side sequencing and FIFO write ports. Traffic is gated on `dfi_init_complete` from the PHY side (tie high in a simple test).
 - **AXI**: Supported transfers follow the checks encoded in the RTL: **INCR** writes with `AWLEN` ≤ `C_MAX_WRITE_AWLEN` (default **3**, i.e. up to four beats), full-width `AWSIZE`; **reads** remain single-beat (`ARLEN == 0`, full-width `ARSIZE`). Unsupported or illegal combinations are rejected with **AXI SLVERR** on the B/R channels where that logic is implemented; see the sources for the exact conditions.
 - **DFI / memory controller**: The `dfi_clk` side runs an **open-page SDRAM-style** FSM (per-bank row tracking, PRE/ACT/CAS with `MC_T_RP`, `MC_T_RCD`, `MC_CL`). AXI addresses decode as `{bank,row,col}` in the low bits (`MC_*_BITS` parameters). **Refresh** and full JEDEC timing are not implemented yet.
-- **Roadmap (in order)**: (1) memory-controller core (open-page PRE/ACT/CAS, `MC_*`) — done; (2) DFI fidelity — in progress (`dfi_act_n` on ACT, optional `dfi_init_start` pulse via `DFI_INIT_START_CYCLES`; P0–P3 phase buses still out of scope); (3) richer AXI — **INCR write bursts** (parameterized `C_MAX_WRITE_AWLEN`, one **B** per burst) done; read bursts / reordering still out; (4) CDC/clock ratio; (5) verification — **Icarus** CI (`make ci`) + elab guards done; **next**: tighten or remove TB handshake spacing once **`async_fifo_gray`** has a **registered read data path** (or show-ahead) co-designed with `rd_empty` / bridge snapshot timing, then **bounded formal** or a **second simulator** on that FIFO alone; (6) **DRAM refresh** + tighter `t*` timing on the MC FSM; (7) synthesis scripts + constraints (CDC false paths); (8) docs. Local pre-release check: **`make audit`** (`ci` + PDF spec).
+- **Roadmap (in order)**: (1) memory-controller core (open-page PRE/ACT/CAS, `MC_*`) — done; (2) DFI fidelity — in progress (`dfi_act_n` on ACT, optional `dfi_init_start` pulse via `DFI_INIT_START_CYCLES`; P0–P3 phase buses still out of scope); (3) richer AXI — **INCR write bursts** (parameterized `C_MAX_WRITE_AWLEN`, one **B** per burst) done; read bursts / broader reordering still out; (4) CDC/clock ratio — **`async_fifo_gray`** now has a registered read path; next is broader FIFO formal / second-simulator coverage; (5) verification — **Icarus** CI (`make ci`) + elab guards done; next: remove remaining nonessential test spacing and add stronger FIFO/order properties; (6) **DRAM refresh** + tighter `t*` timing on the MC FSM; (7) synthesis scripts + constraints (CDC false paths); (8) docs. Local pre-release check: **`make audit`** (`ci` + PDF spec).
+- **Full functionality plan**: see **`doc/FULL_FUNCTIONALITY_PLAN.md`** for the detailed implementation and testing sequence, including CDC hardening, ordered error responses, AXI read bursts, real refresh, DFI phase support, assertions, randomized testing, and synthesis readiness gates.
 
 ## License
 

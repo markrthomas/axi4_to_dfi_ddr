@@ -1,7 +1,10 @@
 # AXI4 to DFI Bridge - Design Specification
 
-**Repository:** axi4_to_dfi_ddr  
+**Repository:** axi4_to_dfi_ddr
+
 **Source file:** `doc/DESIGN_SPEC.md`
+
+**Roadmap:** `doc/FULL_FUNCTIONALITY_PLAN.md`
 
 # 1. Purpose and scope
 
@@ -65,12 +68,12 @@ axi_aclk domain                         dfi_clk domain
 - **Depth**: parameter `DEPTH` (power of two); bridge uses `CDC_FIFO_DEPTH`.
 - **Pointers**: binary write/read pointers converted to Gray for comparison; Gray write pointer synchronized to read clock and vice versa for full/empty.
 - **Full / empty**: classic Gray inequality (MSB pair adjusted for depth width).
-- **Read data**: **first-word fall-through**: `rd_data` reflects `mem[rptr]` when not empty so AXI-style `valid` can align with visible data.
+- **Read data**: `rd_data` is registered in the read clock domain and remains stable while **`rd_empty == 0`** until **`rd_en`** consumes the word. The read side prefetches the next word when available.
 - **Submodules**: two **`cdc_sync`** instances per FIFO for pointer cross.
 
 ## 3.4 Request snapshot registers
 
-On the cycle a request FIFO **`rd_en`** is asserted, the read pointer advances after the posedge; the combinational FWFT output can change immediately. The bridge latches **`wreq_snapshot`** / **`rreq_snapshot`** when **`wreq_rd_en`** / **`rreq_rd_en`** is true and uses those registers on the following cycle (**`*_rd_en_r`**) to unpack ID, address, and write data. This avoids consuming an inconsistent beat.
+On the cycle a request FIFO **`rd_en`** is asserted, the registered FIFO output is consumed and the read pointer advances after the posedge. The bridge latches **`wreq_snapshot`** / **`rreq_snapshot`** when **`wreq_rd_en`** / **`rreq_rd_en`** is true and uses those registers on the following cycle (**`*_rd_en_r`**) to unpack ID, address, and write data.
 
 ## 3.5 Memory controller scheduler (dfi_clk)
 
@@ -122,6 +125,7 @@ Unsupported or illegal shapes are rejected with **SLVERR** (`2'b10`) where imple
 
 - **Reads**: If **`ar_ok`** is false and an AR handshake completes, **`rresp_err_valid`** is raised; **`RVALID`** carries **`RRESP = SLVERR`**, **`RDATA = 0`**, and the captured **`ARID`**. If the memory-controller read window expires without **`dfi_rddata_valid`**, the read response uses **`RRESP = SLVERR`**, **`RDATA = 0`**, and the **`ARID`** for that transaction (via the **`rresp`** FIFO).
 - **Writes**: If AW and W form an illegal pair (e.g. wrong burst/length/last), the bridge can enter a **drain** path: absorb remaining W beats if required, then assert **`BVALID`** with **`BRESP = SLVERR`** and the relevant ID.
+- **Ordering**: Local decode/drain **SLVERR** responses are held pending while older legal same-channel responses are outstanding, so a later local error does not bypass an earlier DFI-returned **B** or **R** response.
 
 Exact decode conditions are defined in **`src/axi4_to_dfi_bridge.v`** (combinational `aw_ok` / `ar_ok`, `write_pair_error`, and the AXI-domain sequential FSM).
 
@@ -178,8 +182,9 @@ Simulation uses **Icarus Verilog** (`iverilog -g2001`). The testbench **`src/tb_
 - **B** and **R** channel backpressure (**`BVALID`/`RVALID`** stable while **`BREADY`/`RREADY`** low for several cycles).
 - **CDC FIFO depth (8):** eight reads issued with **`RREADY`** low until the MC has finished, then eight **R** beats drained in order; eight single-beat writes with **`BREADY`** low, then eight **B** beats drained in order. A **`tb_flush_axi_rsp`** task clears stray **R/B** beats before these blocks.
 - Two outstanding legal reads with different **`ARID`**; responses are checked in **MC / `rreq` FIFO** issue order.
+- Same-ID ordering where a legal write/read is followed by a local illegal write/read; the legal **OKAY** response must appear before the later **SLVERR**.
 - SDRAM-style MC checks (**PRE/ACT/READ CAS/WRITE CAS** counts) for open-page hit, row miss, and cold bank.
-- **Stress (Test 13):** xorshift32 **LFSR** drives gaps and bank/row/column choices. **Writes** (each followed by **B**) run first, then **reads** are issued only while the **`wreq`** FIFO is empty so **MC** order matches **`rreq`** issue order (the scheduler does not pop **`rreq`** until **`wreq`** is empty). **AR** spacing and **R** drains mirror the FIFO-fill test (**Icarus** + FWFT).
+- **Stress (Test 14):** xorshift32 **LFSR** drives gaps and bank/row/column choices. **Writes** (each followed by **B**) run first, then **reads** are issued only while the **`wreq`** FIFO is empty so **MC** order matches **`rreq`** issue order (the scheduler does not pop **`rreq`** until **`wreq`** is empty).
 
 **`tb_param_smoke_refresh`** enables **`MC_REFRESH_INTERVAL` > 0** on the DUT: a single cold write opens one bank, then after idle gaps the refresh walk issues exactly one **PRE** (monitored on **`dfi_clk`**); a second interval with all banks closed must not add further **PRE** pulses.
 
@@ -187,11 +192,13 @@ Simulation uses **Icarus Verilog** (`iverilog -g2001`). The testbench **`src/tb_
 
 **`tb_param_smoke_tras`** instantiates the DUT with **`MC_T_RAS`** and **`MC_T_WR`** both **> 0** and runs two same-bank row-miss writes (see **`make -C test run-smoke-tras`**).
 
-Between some **AR** issues and between back-to-back **R** (or **B**) drains, the testbench inserts a few **`axi_aclk`** waits so **Icarus** simulation stays consistent with the gray **async FIFO** first-word-fall-through read path across **CDC** (tight back-to-back handshakes can otherwise show a wrong ID or a repeated beat in this environment).
+The response FIFO read path is registered, so **`RDATA`**, **`RID`**, and **`BID`** remain stable while valid is asserted and the corresponding ready is low. Some stress and FIFO-fill sequences still include small deterministic gaps to keep issue order and scoreboard expectations simple.
 
 **CI:** **`make -C test ci`** runs the main testbench, **`tb_param_smoke`**, **`tb_param_smoke_zcycles`** ( **`MC_T_RP`/`MC_T_RCD`/`MC_CL`/`DFI_WRITE_ACK_CYCLES` all **0** ), **`tb_param_smoke_refresh`** (**`MC_REFRESH_INTERVAL` > 0**), **`tb_param_smoke_tras`** (**`MC_T_RAS`/`MC_T_WR`**), **seven** **`elab-fail-*`** elaboration guards (illegal parameters must print **`ERROR:`** and **`$finish`**), **Verilator** `--lint-only` on **`axi4_to_dfi_bridge.v`**, **`syn-check`** (**Yosys** on **`syn/yosys.ys`**), and **`formal-fifo`** (**Yosys** bounded BMC on **`formal/fifo_safety_top.sv`**); the Yosys targets are skipped if **`yosys`** is not installed (see **`.github/workflows/ci.yml`**).
 
-**Further hardening:** For stronger CDC ordering evidence than **Icarus** alone, re-verify **`async_fifo_gray`** with a second simulator, bounded formal, or a **registered read data path** designed together with **`rd_empty`** and the bridge’s **`wreq_snapshot` / `rreq_snapshot`** timing (a naive registered mux alone can deadlock or mis-`empty` without that co-design). See **README** roadmap for the ordered backlog.
+**Further hardening:** For stronger CDC ordering evidence than **Icarus** alone, re-verify **`async_fifo_gray`** with a second simulator and broader bounded formal that proves no loss, duplication, or reordering across representative clock phasing. See **README** roadmap for the ordered backlog.
+
+**Full functionality plan:** The staged plan in **`doc/FULL_FUNCTIONALITY_PLAN.md`** is the controlling backlog for moving this bridge beyond the current simulation-oriented subset. It calls out CDC hardening, explicit response ordering, AXI read bursts, real DRAM refresh/timing, DFI phase fidelity, assertion/random verification, and synthesis/integration release gates.
 
 Build and run: **`make -C test run`**; full automation: **`make -C test ci`** (see repository **README.md**).
 
@@ -213,6 +220,10 @@ Build and run: **`make -C test run`**; full automation: **`make -C test ci`** (s
 | 0.12 | **Yosys-only** bounded formal on **`async_fifo_gray`** via **`formal/fifo_safety_top.sv`** and **`make formal-fifo`**. |
 | 0.13 | **`MC_T_RAS`** / **`MC_T_WR`** per-bank **PRE** gating and **`ST_WAIT_PRE`**; **`tb_param_smoke_tras`**. |
 | 0.14 | Elaboration: **`MC_T_*` / `MC_CL` / `MC_RD_DV_MAX` / `DFI_WRITE_ACK_CYCLES`** ≤ **255**; **`DFI_INIT_START_CYCLES`** in **0..65535**; three more **`elab-fail-*`** tops. |
+| 0.15 | Add full functionality and verification plan reference (`doc/FULL_FUNCTIONALITY_PLAN.md`). |
+| 0.16 | Hold local AXI **SLVERR** responses behind older legal same-channel responses; add same-ID ordering tests. |
+| 0.17 | Register **`async_fifo_gray`** read data and update FIFO/verification documentation. |
+| 0.18 | Remove old response-drain spacing from the main testbench; response wait tasks now settle FIFO NBA updates before returning. |
 
 # Document control
 
