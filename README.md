@@ -8,7 +8,9 @@ This repository is a practical starting point for simulation and integration. Th
 
 | Path | Description |
 |------|-------------|
-| `src/axi4_to_dfi_bridge.v` | Top bridge, `cdc_sync`, `async_fifo_gray`, and AXI4 slave → DFI command/data |
+| `src/cdc_fifo_lib.v` | `cdc_sync`, `async_fifo_gray` (gray CDC FIFO) |
+| `src/mc_dfi_scheduler.v` | `dfi_clk` SDRAM-style open-page MC: PRE/ACT/CAS, refresh walk, read-beat sequencing |
+| `src/axi4_to_dfi_bridge.v` | Top: AXI decode/FIFOs, instantiates CDC lib + MC scheduler, ties DFI sidebands |
 | `src/tb_axi4_to_dfi_bridge.v` | Self-contained testbench: dual clocks, PHY read model, **SLVERR** paths, **R/B** backpressure, **rresp**/**bresp** FIFO fill (depth 8), MC command counters, LFSR stress (see **Design spec** section 8) |
 | `src/tb_param_smoke.v` | Minimal second top: **`CDC_FIFO_DEPTH=16`**, **`DFI_INIT_START_CYCLES=0`**; one write and one read (**`make -C test run-smoke`**) |
 | `src/tb_param_smoke_zcycles.v` | Smoke with **`MC_T_RP`/`MC_T_RCD`/`MC_CL`/`DFI_WRITE_ACK_CYCLES` = 0**; cold write/read + row-miss write/read (**`make -C test run-smoke-zc`**) |
@@ -119,7 +121,7 @@ Manual compile (same sources as `test/Makefile`):
 ```bash
 cd test
 mkdir -p build
-iverilog -g2001 -Wall -o build/sim.vvp ../src/axi4_to_dfi_bridge.v ../src/tb_axi4_to_dfi_bridge.v
+iverilog -g2001 -Wall -o build/sim.vvp ../src/cdc_fifo_lib.v ../src/mc_dfi_scheduler.v ../src/axi4_to_dfi_bridge.v ../src/tb_axi4_to_dfi_bridge.v
 vvp build/sim.vvp
 vvp build/sim.vvp +vcd   # optional: writes build/sim.vcd (paths match the testbench)
 ```

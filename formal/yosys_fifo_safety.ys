@@ -5,7 +5,7 @@
 # so async-reset flops become BMC-friendly.
 
 read_verilog -sv fifo_safety_top.sv
-read_verilog ../src/axi4_to_dfi_bridge.v
+read_verilog ../src/cdc_fifo_lib.v
 hierarchy -top fifo_safety_top
 
 proc

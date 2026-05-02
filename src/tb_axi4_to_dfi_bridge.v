@@ -1067,10 +1067,10 @@ module tb;
         axi_wait_b(4'h6);
         axi_wait_b(4'h7);
 
-        // --- Test 11: illegal INCR read with ARLEN != 0 -> SLVERR (no rreq / PHY queue entry) ---
+        // --- Test 11: illegal INCR read with ARLEN > C_MAX_READ_ARLEN -> SLVERR (no rreq / PHY queue) ---
         s_axi_arid    = 4'h4;
         s_axi_araddr  = tb_mc_addr(3'd3, 14'd50, 10'd0);
-        s_axi_arlen   = 8'd1;
+        s_axi_arlen   = 8'd4;
         s_axi_arburst = 2'b01;
         s_axi_arsize  = AXI_SIZE_FULL;
         s_axi_arvalid = 1'b1;

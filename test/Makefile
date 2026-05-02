@@ -28,20 +28,20 @@ DOC_DIR   := ../doc
 BUILD_DIR := build
 SIM       := $(BUILD_DIR)/sim.vvp
 VCD       := $(BUILD_DIR)/sim.vcd
-SOURCES   := $(SRC_DIR)/axi4_to_dfi_bridge.v $(SRC_DIR)/tb_axi4_to_dfi_bridge.v
+SOURCES   := $(SRC_DIR)/cdc_fifo_lib.v $(SRC_DIR)/mc_dfi_scheduler.v $(SRC_DIR)/axi4_to_dfi_bridge.v $(SRC_DIR)/tb_axi4_to_dfi_bridge.v
 SMOKE_TOP := tb_param_smoke
 SMOKE_SIM := $(BUILD_DIR)/smoke.vvp
-SMOKE_SRC := $(SRC_DIR)/axi4_to_dfi_bridge.v $(SRC_DIR)/tb_param_smoke.v
+SMOKE_SRC := $(SRC_DIR)/cdc_fifo_lib.v $(SRC_DIR)/mc_dfi_scheduler.v $(SRC_DIR)/axi4_to_dfi_bridge.v $(SRC_DIR)/tb_param_smoke.v
 SMOKE_ZC_TOP := tb_param_smoke_zcycles
 SMOKE_ZC_SIM := $(BUILD_DIR)/smoke_zc.vvp
-SMOKE_ZC_SRC := $(SRC_DIR)/axi4_to_dfi_bridge.v $(SRC_DIR)/tb_param_smoke_zcycles.v
+SMOKE_ZC_SRC := $(SRC_DIR)/cdc_fifo_lib.v $(SRC_DIR)/mc_dfi_scheduler.v $(SRC_DIR)/axi4_to_dfi_bridge.v $(SRC_DIR)/tb_param_smoke_zcycles.v
 SMOKE_RF_TOP := tb_param_smoke_refresh
 SMOKE_RF_SIM := $(BUILD_DIR)/smoke_refresh.vvp
-SMOKE_RF_SRC := $(SRC_DIR)/axi4_to_dfi_bridge.v $(SRC_DIR)/tb_param_smoke_refresh.v
+SMOKE_RF_SRC := $(SRC_DIR)/cdc_fifo_lib.v $(SRC_DIR)/mc_dfi_scheduler.v $(SRC_DIR)/axi4_to_dfi_bridge.v $(SRC_DIR)/tb_param_smoke_refresh.v
 SMOKE_TRAS_TOP := tb_param_smoke_tras
 SMOKE_TRAS_SIM := $(BUILD_DIR)/smoke_tras.vvp
-SMOKE_TRAS_SRC := $(SRC_DIR)/axi4_to_dfi_bridge.v $(SRC_DIR)/tb_param_smoke_tras.v
-ELAB_FAIL_SRC := $(SRC_DIR)/axi4_to_dfi_bridge.v $(SRC_DIR)/tb_elab_fail.v
+SMOKE_TRAS_SRC := $(SRC_DIR)/cdc_fifo_lib.v $(SRC_DIR)/mc_dfi_scheduler.v $(SRC_DIR)/axi4_to_dfi_bridge.v $(SRC_DIR)/tb_param_smoke_tras.v
+ELAB_FAIL_SRC := $(SRC_DIR)/cdc_fifo_lib.v $(SRC_DIR)/mc_dfi_scheduler.v $(SRC_DIR)/axi4_to_dfi_bridge.v $(SRC_DIR)/tb_elab_fail.v
 
 IVERILOG  := $(shell command -v iverilog)
 VVP       := $(or $(shell command -v vvp 2>/dev/null),$(dir $(IVERILOG))vvp)
@@ -66,7 +66,7 @@ help:
 	@echo "  run-smoke-refresh - MC_REFRESH_INTERVAL + refresh PRE ($(SMOKE_RF_SIM))"
 	@echo "  run-smoke-tras - MC_T_RAS / MC_T_WR row-miss ($(SMOKE_TRAS_SIM))"
 	@echo "  elab-fail-all - seven illegal configs must print ERROR: and finish"
-	@echo "  lint-verilator - Verilator lint on $(SRC_DIR)/axi4_to_dfi_bridge.v (skip if no verilator)"
+	@echo "  lint-verilator - Verilator lint on RTL sources (skip if no verilator)"
 	@echo "  syn-check - Yosys on ../syn/yosys.ys (skip if no yosys)"
 	@echo "  formal-fifo - Yosys BMC on async_fifo_gray wrapper (skip if no yosys)"
 	@echo "  ci     - run + smokes (incl. tras) + elab-fail-all + lint + syn-check + formal-fifo"
@@ -158,7 +158,7 @@ elab-fail-all: elab-fail-width elab-fail-depth elab-fail-addrmap elab-fail-fifo 
 # block so a missing tool does not fall through to the next line.
 lint-verilator:
 	@if command -v $(VERILATOR) >/dev/null 2>&1; then \
-		$(VERILINT) $(SRC_DIR)/axi4_to_dfi_bridge.v; \
+		$(VERILINT) $(SRC_DIR)/cdc_fifo_lib.v $(SRC_DIR)/mc_dfi_scheduler.v $(SRC_DIR)/axi4_to_dfi_bridge.v; \
 	else \
 		echo "SKIP: verilator not in PATH"; \
 	fi
