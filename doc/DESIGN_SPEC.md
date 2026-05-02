@@ -39,10 +39,9 @@ The top module **`axi4_to_dfi_bridge`** instantiates:
 
 | Block | Role |
 |-------|------|
-| **`cdc_sync`** | Vector two-flop synchronizer (destination clock domain). |
-| **`async_fifo_gray`** | Power-of-2-depth gray-pointer FIFO; separate write and read clocks. |
-| **AXI front-end (logic in top)** | Decode AW/W/AR, push to CDC FIFOs, handle errors, drive B/R. |
-| **DFI sequencer (logic in top)** | Pop request FIFOs on `dfi_clk`, drive `dfi_*`, model fixed latency, push B/R payload FIFOs. |
+| **`cdc_sync`** / **`async_fifo_gray`** (`src/cdc_fifo_lib.v`) | Vector two-flop synchronizer and power-of-2 gray-pointer async FIFOs. |
+| **AXI front-end (`axi4_to_dfi_bridge`)** | Decode AW/W/AR, push to CDC FIFOs, handle errors, drive B/R, `r_legal_outstanding` ordering. |
+| **`mc_dfi_scheduler`** (`src/mc_dfi_scheduler.v`) | Pop `wreq`/`rreq` on `dfi_clk`, SDRAM-style PRE/ACT/CAS, push `bresp`/`rresp` write side. |
 
 ```
 axi_aclk domain                         dfi_clk domain
@@ -99,7 +98,7 @@ A **single-transaction** SDRAM-style **open-page** FSM drives `dfi_*` (one AXI-e
 
 ## 4.1 Write path (supported transfers)
 
-1. **AXI**: When AW and W present a **legal** write (`aw_ok`, full bus `AWSIZE`, INCR `AWBURST`), the bridge may push one packed word per **W beat** into **`u_fifo_wreq`** on `axi_aclk`. **Reads** remain single-beat (`ARLEN == 0`) as in section 4.2.
+1. **AXI**: When AW and W present a **legal** write (`aw_ok`, full bus `AWSIZE`, INCR `AWBURST`), the bridge may push one packed word per **W beat** into **`u_fifo_wreq`** on `axi_aclk`. **Reads** are described in section **4.2**.
    - **Single-beat**: `AWLEN == 0` and `WLAST` must be high on that beat.
    - **INCR burst (writes only)**: parameter **`C_MAX_WRITE_AWLEN`** (default **3**) allows `AWLEN` in **0...C_MAX_WRITE_AWLEN** (up to **four** beats for the default). **`WLAST`** must be low on all beats except the last; the last beat's index must equal **`AWLEN`**. After each non-final beat, the held **`AWADDR`** is advanced by **`C_AXI_DATA_WIDTH/8`** for the next FIFO entry.
 2. **Pack format** (`WREQ_W` bits): **MSB** = **`WLAST`** for that beat; then `AWID`, `AWADDR`, `WDATA`, `WSTRB`.
@@ -110,10 +109,10 @@ AW/W **holding registers** allow address and data to arrive in separate cycles b
 
 ## 4.2 Read path (supported transfers)
 
-1. **AXI**: Legal AR (`ar_ok`) pushes `{ARID, ARADDR}` into **`u_fifo_rreq`**.
-2. **DFI**: The FSM may issue **PRE/ACT** before a **READ** CAS; **`dfi_rddata_en`** is asserted for one cycle on the READ CAS.
-3. **Data**: After **`MC_CL`**, the FSM waits in a read-data window for **`dfi_rddata_valid`** (timeout **`MC_RD_DV_MAX`**); then read data (or a timeout indication) is pushed with **`ARID`** to **`u_fifo_rresp`** via a one-cycle **`ST_PULSE_R`**.
-4. **AXI**: Pop yields **`RVALID`**, **`RLAST = 1`**. **`RRESP = OKAY`** when the PHY returned read data in time; if **`dfi_rddata_valid`** never arrived before the timeout, **`RRESP = SLVERR`** and **`RDATA = 0`** (same encoding as an illegal **AR** decode error).
+1. **AXI**: Legal **INCR** AR (`ar_ok`) pushes **`{ARLEN, ARID, ARADDR}`** into **`u_fifo_rreq`** (packed width **`RREQ_W`**). **`ar_ok`** requires: **`ARBURST == INCR`**, **`ARLEN` ≤ `C_MAX_READ_ARLEN`** (default **3** = up to four beats), full-bus **`ARSIZE`**, and **all beats of the burst in one DRAM row** (bank + row MSBs of the first-beat address equal those of the last-beat address, using byte increment **`C_AXI_DATA_WIDTH/8`**). A legal AR increments **`r_legal_outstanding`** on the AXI clock by **`1 + ARLEN`** (one credit per **R** beat returned); **`rresp_rd_en`** decrements by one per completed **R** beat, with a same-cycle **AR+R** adjustment so credits do not drift.
+2. **DFI**: The MC may issue **PRE/ACT** before the first **READ** CAS of a burst, then one **READ** CAS per beat; column/bank/row advance with the burst address. **`dfi_rddata_en`** is asserted for one cycle per **READ** CAS.
+3. **Data**: After each **`MC_CL`** wait, the MC waits for **`dfi_rddata_valid`** (timeout **`MC_RD_DV_MAX`**), latches **`RDATA`** / SLVERR / **`RLAST`** for that beat, then enters **`ST_R_PUSH`** to write **`u_fifo_rresp`** when space allows. Mid-burst read-data timeout emits **SLVERR** beats on **R** (including **`ST_BURST_SLVERR_LOOP`** for remaining beats of the burst).
+4. **AXI**: Pop yields **`RVALID`** with **`RID`**, **`RLAST`**, and **`RRESP`** from the **`rresp`** FIFO (or decode/timeout **SLVERR** paths). **`RRESP = OKAY`** when the beat carried OK read data; timeout or decode error uses **`RRESP = SLVERR`** and **`RDATA = 0`** for the relevant beats.
 
 ## 4.3 Arbitration
 
@@ -127,7 +126,7 @@ Unsupported or illegal shapes are rejected with **SLVERR** (`2'b10`) where imple
 - **Writes**: If AW and W form an illegal pair (e.g. wrong burst/length/last), the bridge can enter a **drain** path: absorb remaining W beats if required, then assert **`BVALID`** with **`BRESP = SLVERR`** and the relevant ID.
 - **Ordering**: Local decode/drain **SLVERR** responses are held pending while older legal same-channel responses are outstanding, so a later local error does not bypass an earlier DFI-returned **B** or **R** response.
 
-Exact decode conditions are defined in **`src/axi4_to_dfi_bridge.v`** (combinational `aw_ok` / `ar_ok`, `write_pair_error`, and the AXI-domain sequential FSM).
+Exact **AXI** decode and error FSM conditions are in **`src/axi4_to_dfi_bridge.v`** (`aw_ok` / `ar_ok`, `write_pair_error`, etc.). The **`dfi_clk`** read/write command FSM lives in **`src/mc_dfi_scheduler.v`**.
 
 # 6. DFI presentation
 
@@ -158,16 +157,17 @@ Exact decode conditions are defined in **`src/axi4_to_dfi_bridge.v`** (combinati
 | `MC_REFRESH_INTERVAL` | **dfi_clk** cycles between refresh walks (**0** = off). Countdown runs only in fully idle MC gaps; at **0** the design **PRE**-closes any open bank in index order, then reloads the counter. |
 | `DFI_INIT_START_CYCLES` | MC init: pulse `dfi_init_start` high for this many `dfi_clk` cycles after reset release; **0** ties off. Must be **0..65535** (16-bit counter in RTL). |
 | `C_MAX_WRITE_AWLEN` | Legal **INCR** write burst length: **`AWLEN`** must be no greater than this value (default **3** = four beats). **0** restricts writes to single-beat only. |
+| `C_MAX_READ_ARLEN` | Legal **INCR** read burst length: **`ARLEN`** must be no greater than this value (default **3**). Bursts must not cross the DRAM row implied by **`MC_COL_BITS`**, **`MC_ROW_BITS`**, and **`DFI_BANK_WIDTH`**. **`CDC_FIFO_DEPTH`** must be **≥ `C_MAX_READ_ARLEN` + 1** for the **RRESP** FIFO. |
 
 ## 7.1 Elaboration checks (RTL)
 
-At simulation/elaboration time, **`axi4_to_dfi_bridge`** and each **`async_fifo_gray`** instance validate parameters and **`$finish`** on violation:
+At simulation/elaboration time, **`axi4_to_dfi_bridge`** (and each **`async_fifo_gray`** in **`cdc_fifo_lib.v`**) validate parameters and **`$finish`** on violation:
 
 - **`C_AXI_DATA_WIDTH`** must equal **`DFI_DATA_WIDTH`**, and **`DFI_MASK_WIDTH`** must equal **`C_AXI_DATA_WIDTH/8`** (there is no width adapter in the datapath).
 - **`MC_COL_BITS + MC_ROW_BITS + DFI_BANK_WIDTH`** must not exceed **`C_AXI_ADDR_WIDTH`**; **`MC_COL_BITS`** and **`MC_ROW_BITS`** must be at least **1**; **`DFI_ADDR_WIDTH`** must cover **`MC_ROW_BITS`** and **`MC_COL_BITS`** on the command bus.
 - **`CDC_FIFO_DEPTH`** must be a power of two **>= 2** (same rule as **`async_fifo_gray` `DEPTH`**).
 - **`DFI_BANK_WIDTH`** must not exceed **24** (implementation limit on bank count).
-- **`C_AXI_ID_WIDTH`** must be **>= 1**; **`C_MAX_WRITE_AWLEN`** in **0..255**; **`MC_REFRESH_INTERVAL`** must be **>= 0**.
+- **`C_AXI_ID_WIDTH`** must be **>= 1**; **`C_MAX_WRITE_AWLEN`** and **`C_MAX_READ_ARLEN`** in **0..255**; **`CDC_FIFO_DEPTH` ≥ `C_MAX_READ_ARLEN` + 1**; **`MC_REFRESH_INTERVAL`** must be **>= 0**.
 - **`MC_T_RP`**, **`MC_T_RCD`**, **`MC_T_RAS`**, **`MC_T_WR`**, **`MC_CL`**, **`MC_RD_DV_MAX`**, and **`DFI_WRITE_ACK_CYCLES`** must be in **0..255** (stored in **8-bit** counters; larger values are not silently truncated).
 - **`DFI_INIT_START_CYCLES`** must be in **0..65535** (16-bit counter).
 
@@ -178,7 +178,7 @@ Simulation uses **Icarus Verilog** (`iverilog -g2001`). The testbench **`src/tb_
 - Independent **`axi_aclk`** and **`dfi_clk`** generators.
 - A minimal PHY read-return model (**`TB_PHY_MC_CL`** should match DUT **`MC_CL`**) and scoreboard checks.
 - Optional **`+vcd`** for **gtkwave**.
-- Init gating (**`dfi_init_complete`**), **SLVERR** on illegal AW/W and illegal AR (wrong burst, wrong **`AWSIZE`/`ARSIZE`**, **`ARLEN` != 0** for reads), and **SLVERR** on read-data timeout (**`tb_phy_suppress_rddv`** withholds **`dfi_rddata_valid`**).
+- Init gating (**`dfi_init_complete`**), **SLVERR** on illegal AW/W and illegal AR (e.g. wrong burst, wrong **`AWSIZE`/`ARSIZE`**, **`ARLEN`** above **`C_MAX_READ_ARLEN`**, or a burst that would cross a DRAM row), and **SLVERR** on read-data timeout (**`tb_phy_suppress_rddv`** withholds **`dfi_rddata_valid`**).
 - **B** and **R** channel backpressure (**`BVALID`/`RVALID`** stable while **`BREADY`/`RREADY`** low for several cycles).
 - **CDC FIFO depth (8):** eight reads issued with **`RREADY`** low until the MC has finished, then eight **R** beats drained in order; eight single-beat writes with **`BREADY`** low, then eight **B** beats drained in order. A **`tb_flush_axi_rsp`** task clears stray **R/B** beats before these blocks.
 - Two outstanding legal reads with different **`ARID`**; responses are checked in **MC / `rreq` FIFO** issue order.
@@ -198,7 +198,7 @@ The response FIFO read path is registered, so **`RDATA`**, **`RID`**, and **`BID
 
 **Further hardening:** For stronger CDC ordering evidence than **Icarus** alone, re-verify **`async_fifo_gray`** with a second simulator and broader bounded formal that proves no loss, duplication, or reordering across representative clock phasing. See **README** roadmap for the ordered backlog.
 
-**Full functionality plan:** The staged plan in **`doc/FULL_FUNCTIONALITY_PLAN.md`** is the controlling backlog for moving this bridge beyond the current simulation-oriented subset. It calls out CDC hardening, explicit response ordering, AXI read bursts, real DRAM refresh/timing, DFI phase fidelity, assertion/random verification, and synthesis/integration release gates.
+**Full functionality plan:** The staged plan in **`doc/FULL_FUNCTIONALITY_PLAN.md`** is the controlling backlog for moving this bridge beyond the current simulation-oriented subset. It calls out CDC hardening, explicit response ordering, broader AXI read policies (narrow/unaligned/wrap, etc.), real DRAM refresh/timing, DFI phase fidelity, assertion/random verification, and synthesis/integration release gates.
 
 Build and run: **`make -C test run`**; full automation: **`make -C test ci`** (see repository **README.md**).
 
@@ -211,7 +211,7 @@ Build and run: **`make -C test run`**; full automation: **`make -C test ci`** (s
 | 0.3 | DFI fidelity slice: `dfi_act_n` on ACT; `DFI_INIT_START_CYCLES` for optional `dfi_init_start` pulse. |
 | 0.4 | INCR write bursts up to `C_MAX_WRITE_AWLEN` (default four beats): one `wreq` FIFO entry per W beat (MSB = `WLAST`); one **B** after the last beat. |
 | 0.5 | Read data timeout reports **SLVERR**; `open_row_mem` reset covers all banks; PDF-friendly ASCII in this source. |
-| 0.6 | Verification section: extended testbench (FIFO fill under **RREADY**/**BREADY**, illegal **`ARLEN`**, dual **ARID** order, MC counters); note on **Icarus** + CDC FIFO handshake spacing. |
+| 0.6 | Verification section: extended testbench (FIFO fill under **RREADY**/**BREADY**, illegal read shapes, dual **ARID** order, MC counters); note on **Icarus** + CDC FIFO handshake spacing. |
 | 0.7 | Elaboration-time parameter checks (data/mask widths, address map, CDC FIFO depth); explicit **0-cycle** handling for `MC_T_RP`, `MC_T_RCD`, `DFI_WRITE_ACK_CYCLES`, and `MC_CL`. |
 | 0.8 | LFSR stress phase (writes then reads); **`tb_param_smoke`**; **`make ci`** (**iverilog** + **verilator** lint); GitHub Actions workflow. |
 | 0.9 | **`tb_param_smoke_zcycles`**; **`tb_elab_fail`** + Makefile **`elab-fail-*`**; **`DFI_WRITE_ACK_CYCLES=0`** uses one **`ST_WAIT_B`** cycle so **B** is pushed. |
@@ -224,6 +224,7 @@ Build and run: **`make -C test run`**; full automation: **`make -C test ci`** (s
 | 0.16 | Hold local AXI **SLVERR** responses behind older legal same-channel responses; add same-ID ordering tests. |
 | 0.17 | Register **`async_fifo_gray`** read data and update FIFO/verification documentation. |
 | 0.18 | Remove old response-drain spacing from the main testbench; response wait tasks now settle FIFO NBA updates before returning. |
+| 0.19 | **INCR** read bursts (**`C_MAX_READ_ARLEN`**, one-row constraint, **`RLAST`** / **`rresp`** FIFO); RTL split **`cdc_fifo_lib.v`** + **`mc_dfi_scheduler.v`**; **`r_legal`** same-cycle **AR+R** fix; doc alignment with implementation. |
 
 # Document control
 

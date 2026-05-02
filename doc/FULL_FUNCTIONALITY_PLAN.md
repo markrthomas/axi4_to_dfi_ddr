@@ -9,7 +9,7 @@
 The current RTL is a useful bring-up bridge, not a complete DDR controller. It already includes:
 
 - AXI4 slave handshakes for supported traffic.
-- AXI write bursts up to `C_MAX_WRITE_AWLEN`; reads are still single-beat.
+- AXI write bursts up to `C_MAX_WRITE_AWLEN`; **INCR** read bursts up to `C_MAX_READ_ARLEN` within one DRAM row (`src/axi4_to_dfi_bridge.v` + `src/mc_dfi_scheduler.v`).
 - Four gray-code asynchronous FIFOs across the AXI and DFI clock domains.
 - A single-transaction open-page scheduler with PRE/ACT/CAS, basic per-bank row tracking, `MC_T_RP`, `MC_T_RCD`, `MC_T_RAS`, `MC_T_WR`, `MC_CL`, and read-data timeout handling.
 - Optional all-bank refresh walk that closes open rows with PRE commands.
@@ -77,10 +77,11 @@ Use the existing design as a prototype and tighten it in small, testable slices:
 
 ## RTL Updates
 
-- Split the design into:
+- **Progress:** `cdc_fifo_lib.v` (CDC FIFO) and `mc_dfi_scheduler.v` (MC on `dfi_clk`) are split from the top; remaining work is a cleaner **AXI-only** front-end wrapper and optional **`dfi_adapter`** if the DFI presentation is separated further.
+- Split the design further into:
   - `axi4_slave_frontend`: AW/W/AR decode, burst tracking, illegal transaction handling.
   - `axi_cdc_queues`: request and response CDC FIFOs.
-  - `mc_scheduler`: internal read/write command scheduling.
+  - `mc_scheduler` (partially satisfied by `mc_dfi_scheduler.v`): internal read/write command scheduling.
   - `dfi_adapter`: DFI command/data/update/init signal presentation.
 - Define an internal command/response interface:
   - command type: read/write.
@@ -108,11 +109,11 @@ Use the existing design as a prototype and tighten it in small, testable slices:
 
 ## RTL Updates
 
-- Add read bursts:
-  - accept legal `ARLEN > 0`.
-  - increment addresses per beat.
-  - return one R beat per read command beat.
-  - assert `RLAST` only on the final beat.
+- **Done (baseline):** INCR read bursts with `ARLEN` ≤ `C_MAX_READ_ARLEN`, full-width `ARSIZE`, one-row constraint, per-beat `RLAST`/`RRESP` via `rresp` FIFO; `r_legal_outstanding` matches `1+ARLEN` credits per AR.
+- **Remaining read features:**
+  - narrow / unaligned transfers and `WSTRB`/`ARSIZE` policies beyond full width.
+  - FIXED / WRAP bursts and exclusive access if required.
+  - configurable outstanding limits and explicit cross-ID ordering rules.
 - Add configurable outstanding transaction limits per channel.
 - Support same-ID ordering and define cross-ID ordering behavior explicitly.
 - Decide and document support policy for:
@@ -264,11 +265,10 @@ Implement these first, in order:
 1. Strengthen FIFO formal checks for no loss, duplication, or reordering.
 2. Replace the initial local-SLVERR pending logic with unified ordered response queues if future AXI features need more than one pending local error per channel.
 3. Add a second simulator target for FIFO and bridge smoke coverage.
-4. Split the top-level code into AXI, CDC, scheduler, and DFI modules.
-5. Split the top-level code into AXI, CDC, scheduler, and DFI modules.
-6. Add read bursts and burst read scoreboarding.
-7. Replace refresh PRE-walk with a real REF command and `tRFC` timing.
-8. Add a DFI BFM and phase-alignment checks for the intended PHY.
+4. Continue modularization: dedicated AXI front-end and optional `dfi_adapter` (CDC + `mc_dfi_scheduler` are already separate files).
+5. Burst read scoreboarding and randomized read-burst stress beyond the current directed tests.
+6. Replace refresh PRE-walk with a real REF command and `tRFC` timing.
+7. Add a DFI BFM and phase-alignment checks for the intended PHY.
 
 # 11. Release Gates
 
