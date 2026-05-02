@@ -6,6 +6,8 @@
 
 read_verilog ../src/cdc_fifo_lib.v
 read_verilog ../src/mc_dfi_scheduler.v
+read_verilog ../src/axi4_bridge_frontend.v
+read_verilog ../src/dfi_adapter.v
 read_verilog ../src/axi4_to_dfi_bridge.v
 hierarchy -top axi4_to_dfi_bridge -check
 proc

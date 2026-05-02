@@ -35,12 +35,13 @@ This implementation is **not** a certified protocol checker; it follows common i
 
 ## 3.1 Block overview
 
-The top module **`axi4_to_dfi_bridge`** instantiates:
+The top module **`axi4_to_dfi_bridge`** instantiates **`axi4_bridge_frontend`** and **`dfi_adapter`**, which in turn use:
 
 | Block | Role |
 |-------|------|
 | **`cdc_sync`** / **`async_fifo_gray`** (`src/cdc_fifo_lib.v`) | Vector two-flop synchronizer and power-of-2 gray-pointer async FIFOs. |
-| **AXI front-end (`axi4_to_dfi_bridge`)** | Decode AW/W/AR, push to CDC FIFOs, handle errors, drive B/R, `r_legal_outstanding` ordering. |
+| **`axi4_bridge_frontend`** (`src/axi4_bridge_frontend.v`) | Decode AW/W/AR, push/pull CDC FIFOs, handle errors, drive B/R, `r_legal_outstanding` ordering. |
+| **`dfi_adapter`** (`src/dfi_adapter.v`) | Optional **`dfi_init_start`** pulse, tied DFI update/LP handshakes, **`mc_dfi_scheduler`**, DFI command/data outputs. |
 | **`mc_dfi_scheduler`** (`src/mc_dfi_scheduler.v`) | Pop `wreq`/`rreq` on `dfi_clk`, SDRAM-style PRE/ACT/CAS, push `bresp`/`rresp` write side. |
 
 ```
@@ -126,7 +127,7 @@ Unsupported or illegal shapes are rejected with **SLVERR** (`2'b10`) where imple
 - **Writes**: If AW and W form an illegal pair (e.g. wrong burst/length/last), the bridge can enter a **drain** path: absorb remaining W beats if required, then assert **`BVALID`** with **`BRESP = SLVERR`** and the relevant ID.
 - **Ordering**: Local decode/drain **SLVERR** responses are held pending while older legal same-channel responses are outstanding, so a later local error does not bypass an earlier DFI-returned **B** or **R** response.
 
-Exact **AXI** decode and error FSM conditions are in **`src/axi4_to_dfi_bridge.v`** (`aw_ok` / `ar_ok`, `write_pair_error`, etc.). The **`dfi_clk`** read/write command FSM lives in **`src/mc_dfi_scheduler.v`**.
+Exact **AXI** decode and error FSM conditions are in **`src/axi4_bridge_frontend.v`** (`aw_ok` / `ar_ok`, `write_pair_error`, etc.). The **`dfi_clk`** read/write command FSM lives in **`src/mc_dfi_scheduler.v`** (instantiated under **`src/dfi_adapter.v`**).
 
 # 6. DFI presentation
 
@@ -194,7 +195,7 @@ Simulation uses **Icarus Verilog** (`iverilog -g2001`). The testbench **`src/tb_
 
 The response FIFO read path is registered, so **`RDATA`**, **`RID`**, and **`BID`** remain stable while valid is asserted and the corresponding ready is low. Some stress and FIFO-fill sequences still include small deterministic gaps to keep issue order and scoreboard expectations simple.
 
-**CI:** **`make -C test ci`** runs the main testbench, **`tb_param_smoke`**, **`tb_param_smoke_zcycles`** ( **`MC_T_RP`/`MC_T_RCD`/`MC_CL`/`DFI_WRITE_ACK_CYCLES` all **0** ), **`tb_param_smoke_refresh`** (**`MC_REFRESH_INTERVAL` > 0**), **`tb_param_smoke_tras`** (**`MC_T_RAS`/`MC_T_WR`**), **seven** **`elab-fail-*`** elaboration guards (illegal parameters must print **`ERROR:`** and **`$finish`**), **Verilator** `--lint-only` on **`cdc_fifo_lib.v`**, **`mc_dfi_scheduler.v`**, and **`axi4_to_dfi_bridge.v`**, **`syn-check`** (**Yosys** on **`syn/yosys.ys`**), and **`formal-fifo`** (**Yosys** bounded BMC on **`formal/fifo_safety_top.sv`**); the Yosys targets are skipped if **`yosys`** is not installed (see **`.github/workflows/ci.yml`**).
+**CI:** **`make -C test ci`** runs the main testbench, **`tb_param_smoke`**, **`tb_param_smoke_zcycles`** ( **`MC_T_RP`/`MC_T_RCD`/`MC_CL`/`DFI_WRITE_ACK_CYCLES` all **0** ), **`tb_param_smoke_refresh`** (**`MC_REFRESH_INTERVAL` > 0**), **`tb_param_smoke_tras`** (**`MC_T_RAS`/`MC_T_WR`**), **seven** **`elab-fail-*`** elaboration guards (illegal parameters must print **`ERROR:`** and **`$finish`**), **Verilator** `--lint-only` on the bridge RTL set (**`cdc_fifo_lib.v`**, **`mc_dfi_scheduler.v`**, **`axi4_bridge_frontend.v`**, **`dfi_adapter.v`**, **`axi4_to_dfi_bridge.v`**), **`syn-check`** (**Yosys** on **`syn/yosys.ys`**), and **`formal-fifo`** (**Yosys** bounded BMC on **`formal/fifo_safety_top.sv`**); the Yosys targets are skipped if **`yosys`** is not installed (see **`.github/workflows/ci.yml`**).
 
 **Further hardening:** For stronger CDC ordering evidence than **Icarus** alone, re-verify **`async_fifo_gray`** with a second simulator and broader bounded formal that proves no loss, duplication, or reordering across representative clock phasing. See **README** roadmap for the ordered backlog.
 
@@ -225,6 +226,7 @@ Build and run: **`make -C test run`**; full automation: **`make -C test ci`** (s
 | 0.17 | Register **`async_fifo_gray`** read data and update FIFO/verification documentation. |
 | 0.18 | Remove old response-drain spacing from the main testbench; response wait tasks now settle FIFO NBA updates before returning. |
 | 0.19 | **INCR** read bursts (**`C_MAX_READ_ARLEN`**, one-row constraint, **`RLAST`** / **`rresp`** FIFO); RTL split **`cdc_fifo_lib.v`** + **`mc_dfi_scheduler.v`**; **`r_legal`** same-cycle **AR+R** fix; doc alignment with implementation. |
+| 0.20 | **`axi4_bridge_frontend.v`** + **`dfi_adapter.v`**: AXI/FIFO front-end vs DFI/MC shell; **`fifo_safety_top`** assumes at most one of **`wr_en`/`rd_en`** per cycle (BMC-friendly underapproximation). |
 
 # Document control
 

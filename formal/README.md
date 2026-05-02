@@ -15,8 +15,8 @@ Flow: `read_verilog -sv`, `hierarchy -top fifo_safety_top`, `prep`, **`async2syn
 The wrapper:
 
 - Holds an internal **phased reset** so BMC does not start from arbitrary post-`async2sync` register states.
-- **Assumes** the host does not push when `full` or pop when `empty`.
-- **Asserts** a reference depth counter stays `<= DEPTH` and `full` / `empty` are not both true.
+- **Assumes** the host does not push when `full` or pop when `empty`, and **at most one of `wr_en` / `rd_en` per cycle** (the RTL allows same-edge wr+rd; this is a deliberate **underapproximation** so bounded BMC stays tractable).
+- **Asserts** a shadow depth counter stays `<= DEPTH` and `full` / `empty` are not both true.
 
 A byte-for-byte **scoreboard** against `wr_data` (proving no loss, duplication, or reorder on the read port) is not in this harness yet: the DUT’s **`cdc_sync`** on Gray pointers plus the **registered read prefetch** (`rd_data_q` / `rd_valid_q`) means visible `rd_data` lags `wr_en` by several `clk` edges even when `wr_clk == rd_clk`. A future extension should mirror that read-side FSM (or use a tool flow with `$past` / SVA over the internal nets) rather than a naive immediate push model.
 

@@ -1,4 +1,4 @@
-// cdc_fifo_lib.v — CDC synchronizer + Gray async FIFO (used by axi4_to_dfi_bridge)
+// cdc_fifo_lib.v — CDC synchronizer + Gray async FIFO (used by axi4_bridge_frontend / bridge)
 `timescale 1ns / 1ps
 // Two-flop synchronizer (vector)
 //-----------------------------------------------------------------------------

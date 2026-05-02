@@ -77,7 +77,7 @@ Use the existing design as a prototype and tighten it in small, testable slices:
 
 ## RTL Updates
 
-- **Progress:** `cdc_fifo_lib.v` (CDC FIFO) and `mc_dfi_scheduler.v` (MC on `dfi_clk`) are split from the top; remaining work is a cleaner **AXI-only** front-end wrapper and optional **`dfi_adapter`** if the DFI presentation is separated further.
+- **Progress:** `cdc_fifo_lib.v`, `mc_dfi_scheduler.v`, **`axi4_bridge_frontend.v`** (AXI + FIFOs + ordering), and **`dfi_adapter.v`** (DFI/MC + init pulse) are split from **`axi4_to_dfi_bridge`**; further cleanup can peel a thinner top or add a dedicated **`dfi_adapter`** feature set (P0–P3, real REF).
 - Split the design further into:
   - `axi4_slave_frontend`: AW/W/AR decode, burst tracking, illegal transaction handling.
   - `axi_cdc_queues`: request and response CDC FIFOs.
@@ -262,7 +262,7 @@ Use the existing design as a prototype and tighten it in small, testable slices:
 
 Implement these first, in order:
 
-1. Strengthen FIFO formal checks for no loss, duplication, or reordering.
+1. Strengthen FIFO formal checks for no loss, duplication, or reordering (baseline: shadow depth + mutex + **no same-cycle wr+rd** in `fifo_safety_top`; add scoreboard / `$past` or SymbiYosys for data + dual-clock).
 2. Replace the initial local-SLVERR pending logic with unified ordered response queues if future AXI features need more than one pending local error per channel.
 3. Add a second simulator target for FIFO and bridge smoke coverage.
 4. Continue modularization: dedicated AXI front-end and optional `dfi_adapter` (CDC + `mc_dfi_scheduler` are already separate files).

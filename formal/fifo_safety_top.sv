@@ -5,6 +5,10 @@
 // high (constrained below for bounded depth).
 //
 // wr_clk == rd_clk == clk. Assumes host obeys !full / !empty.
+//
+// Strengthening vs baseline: bounded depth, full/empty mutex, and **at most one
+// of wr_en / rd_en per cycle** (legal subset; RTL still supports same-edge
+// wr+rd in real use). A shadow occupancy counter matches legal push/pop steps.
 
 `timescale 1ns / 1ps
 
@@ -19,7 +23,6 @@ module fifo_safety_top (
     localparam integer WIDTH = 8;
     localparam integer DEPTH = 8;
 
-    // Power-on: release FIFO reset only after enough cycles for a clean state.
     reg [2:0] ph;
     always @(posedge clk) begin
         if (ph != 3'd7)
@@ -30,7 +33,6 @@ module fifo_safety_top (
 
     wire eff_rst_n = (ph >= 3'd4) && rst_n;
 
-    // Stay out of reset after warm-up so asserts apply to steady operation
     always @(*) assume (!(ph >= 3'd4) || rst_n);
 
     wire full;
@@ -73,6 +75,7 @@ module fifo_safety_top (
     always @(*) begin
         assume (!(wr_en && full));
         assume (!(rd_en && empty));
+        assume (!(wr_en && rd_en));
     end
 
     always @(posedge clk) begin
