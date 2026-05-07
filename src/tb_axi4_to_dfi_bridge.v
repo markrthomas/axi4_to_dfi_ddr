@@ -43,6 +43,7 @@ module tb;
     integer tb_rs_pr;
     reg [C_AXI_ADDR_WIDTH-1:0] tb_rs_raddr [0:15];
     reg [C_AXI_ID_WIDTH-1:0]   tb_rs_rid   [0:15];
+    reg [7:0]                  tb_rs_arlen [0:15];
 
     // Asynchronous clocks (CDC path in DUT)
     reg axi_aclk;
@@ -323,8 +324,10 @@ module tb;
 
     //-------------------------------------------------------------------------
     // Queue AR addresses so the PHY model returns data for reads in issue order.
+    // Depth 64: multi-beat bursts push one entry per READ CAS beat.
     //-------------------------------------------------------------------------
-    reg [C_AXI_ADDR_WIDTH-1:0] tb_read_addr_q [0:15];
+    localparam integer TB_READ_ADDR_QD = 64;
+    reg [C_AXI_ADDR_WIDTH-1:0] tb_read_addr_q [0:TB_READ_ADDR_QD-1];
     integer tb_read_addr_wr_ptr;
     integer tb_read_addr_rd_ptr;
     // Pulse high (dfi_clk domain) to clear PHY read pipeline and rd_ptr
@@ -339,7 +342,7 @@ module tb;
     task tb_push_read_addr;
         input [C_AXI_ADDR_WIDTH-1:0] addr;
         begin
-            tb_read_addr_q[tb_read_addr_wr_ptr[3:0]] = addr;
+            tb_read_addr_q[tb_read_addr_wr_ptr % TB_READ_ADDR_QD] = addr;
             tb_read_addr_wr_ptr = tb_read_addr_wr_ptr + 1;
         end
     endtask
@@ -347,7 +350,7 @@ module tb;
     task tb_clear_read_addr_q;
         begin
             tb_read_addr_wr_ptr = 0;
-            for (tb_qi = 0; tb_qi < 16; tb_qi = tb_qi + 1)
+            for (tb_qi = 0; tb_qi < TB_READ_ADDR_QD; tb_qi = tb_qi + 1)
                 tb_read_addr_q[tb_qi] = {C_AXI_ADDR_WIDTH{1'b0}};
         end
     endtask
@@ -379,7 +382,7 @@ module tb;
                     if (!tb_phy_suppress_rddv) begin
                         dfi_rddata_valid <= 1'b1;
                         dfi_rddata <= {32'hA5A5A5A5, 14'h0,
-                                       tb_read_addr_q[tb_read_addr_rd_ptr[3:0]][DFI_ADDR_WIDTH-1:0]};
+                                       tb_read_addr_q[tb_read_addr_rd_ptr % TB_READ_ADDR_QD][DFI_ADDR_WIDTH-1:0]};
                     end
                     // Advance queue whenever the MC read window ends (valid or suppressed timeout)
                     tb_read_addr_rd_ptr <= tb_read_addr_rd_ptr + 1;
@@ -659,12 +662,40 @@ module tb;
         begin
             s_axi_arid    = id;
             s_axi_araddr  = addr;
+            s_axi_arlen   = 8'd0;
             s_axi_arvalid = 1'b1;
             @(posedge axi_aclk);
             while (!s_axi_arready)
                 @(posedge axi_aclk);
             tb_push_read_addr(s_axi_araddr);
             s_axi_arvalid = 1'b0;
+        end
+    endtask
+
+    // Legal INCR read burst: push one PHY-queue address per beat (same row as DUT).
+    task axi_read_incr_burst;
+        input [C_AXI_ADDR_WIDTH-1:0] base_addr;
+        input [C_AXI_ID_WIDTH-1:0]     id;
+        input [7:0]                    arlen;
+        integer                        bi;
+        reg [C_AXI_ADDR_WIDTH-1:0]     beat_a;
+        begin
+            s_axi_arid    = id;
+            s_axi_araddr  = base_addr;
+            s_axi_arlen   = arlen;
+            s_axi_arburst = 2'b01;
+            s_axi_arsize  = AXI_SIZE_FULL;
+            s_axi_arvalid = 1'b1;
+            @(posedge axi_aclk);
+            while (!s_axi_arready)
+                @(posedge axi_aclk);
+            for (bi = 0; bi <= arlen; bi = bi + 1) begin
+                beat_a = base_addr + (bi * (C_AXI_DATA_WIDTH / 8));
+                tb_push_read_addr(beat_a);
+            end
+            s_axi_arvalid = 1'b0;
+            #1;
+            s_axi_arlen   = 8'd0;
         end
     endtask
 
@@ -711,6 +742,45 @@ module tb;
             // Let response FIFO nonblocking updates expose any prefetched next beat.
             #1;
             s_axi_rready = 1'b0;
+        end
+    endtask
+
+    // Scoreboard all beats of one INCR read burst (ARLEN matches last beat index).
+    task axi_wait_r_burst;
+        input [C_AXI_ID_WIDTH-1:0]     exp_id;
+        input [C_AXI_ADDR_WIDTH-1:0] base_addr;
+        input [7:0]                    arlen;
+        integer                        bk;
+        reg [C_AXI_ADDR_WIDTH-1:0]     beat_a;
+        reg                            exp_last;
+        begin
+            for (bk = 0; bk <= arlen; bk = bk + 1) begin
+                beat_a   = base_addr + (bk * (C_AXI_DATA_WIDTH / 8));
+                exp_last = (bk == arlen);
+                while (!s_axi_rvalid)
+                    @(posedge axi_aclk);
+                if (s_axi_rid !== exp_id) begin
+                    $display("FAIL: burst RID beat %0d exp %h got %h", bk, exp_id, s_axi_rid);
+                    errors = errors + 1;
+                end
+                if (s_axi_rdata !== expected_rdata(beat_a)) begin
+                    $display("FAIL: burst RDATA beat %0d addr %h exp %h got %h",
+                             bk, beat_a, expected_rdata(beat_a), s_axi_rdata);
+                    errors = errors + 1;
+                end
+                if (s_axi_rresp !== 2'b00) begin
+                    $display("FAIL: burst RRESP beat %0d not OKAY: %b", bk, s_axi_rresp);
+                    errors = errors + 1;
+                end
+                if (s_axi_rlast !== exp_last) begin
+                    $display("FAIL: burst RLAST beat %0d exp %b got %b", bk, exp_last, s_axi_rlast);
+                    errors = errors + 1;
+                end
+                s_axi_rready = 1'b1;
+                @(posedge axi_aclk);
+                #1;
+                s_axi_rready = 1'b0;
+            end
         end
     endtask
 
@@ -1000,6 +1070,18 @@ module tb;
         mon_en = 1'b0;
         tb_check_mc_counts(0, 1, 0, 1);
 
+        // --- Test 8d: INCR read burst (ARLEN=3) scoreboarded vs PHY queue (one row) ---
+        tb_flush_axi_rsp;
+        tb_clear_read_addr_q;
+        tb_read_model_rst = 1'b1;
+        repeat (12) @(posedge dfi_clk);
+        tb_read_model_rst = 1'b0;
+        repeat (10) @(posedge axi_aclk);
+
+        axi_read_incr_burst(tb_mc_addr(3'd6, 14'd201, 10'd0), 4'hE, 8'd3);
+        tb_wait_dfi_mc(3500);
+        axi_wait_r_burst(4'hE, tb_mc_addr(3'd6, 14'd201, 10'd0), 8'd3);
+
         // --- Test 9: RRESP async FIFO (depth 8) backs up with RREADY low; drain in issue order ---
         s_axi_arvalid = 1'b0;
         tb_flush_axi_rsp;
@@ -1164,13 +1246,42 @@ module tb;
             tb_rs_raddr[tb_rs_pr] = tb_mc_addr(tb_rs_bank[2:0], tb_rs_row[13:0], tb_rs_col[9:0]);
             axi_read_single(tb_rs_raddr[tb_rs_pr], tb_rs_pr[3:0]);
             tb_rs_rid[tb_rs_pr] = tb_rs_pr[3:0];
+            tb_rs_arlen[tb_rs_pr] = 8'd0;
             tb_rs_pr = tb_rs_pr + 1;
             repeat (2) @(posedge axi_aclk);
         end
 
+        // Drain single reads before issuing bursts — RRESP FIFO (depth 8) would
+        // otherwise fill, stalling the MC and deadlocking burst AR issuance.
         tb_wait_dfi_mc(2500);
-        for (tb_rs_op = 0; tb_rs_op < tb_rs_pr; tb_rs_op = tb_rs_op + 1) begin
+        for (tb_rs_op = 0; tb_rs_op < tb_rs_pr; tb_rs_op = tb_rs_op + 1)
             axi_wait_r(tb_rs_rid[tb_rs_op], expected_rdata(tb_rs_raddr[tb_rs_op]));
+        tb_rs_pr = 0;
+
+        for (tb_rs_op = 0; tb_rs_op < 8; tb_rs_op = tb_rs_op + 1) begin
+            tb_rng_step;
+            tb_rs_gap = 1 + (tb_rng_state & 32'h3);
+            repeat (tb_rs_gap) @(posedge axi_aclk);
+            tb_rng_step;
+            tb_rs_bank = (tb_rng_state >> 10) & 7;
+            tb_rs_row  = 14'd160 + ((tb_rs_op * 11) % 48);
+            tb_rs_arlen[tb_rs_pr] = (tb_rng_state >> 20) & 8'h03;
+            tb_rs_col  = (((tb_rs_op * 31) % 112) * 8) & 10'h380;
+            if ((tb_rs_col + (tb_rs_arlen[tb_rs_pr] * 8)) >= 1024)
+                tb_rs_col = 10'h200;
+            tb_rs_raddr[tb_rs_pr] = tb_mc_addr(tb_rs_bank[2:0], tb_rs_row[13:0], tb_rs_col[9:0]);
+            axi_read_incr_burst(tb_rs_raddr[tb_rs_pr], tb_rs_pr[3:0], tb_rs_arlen[tb_rs_pr]);
+            tb_rs_rid[tb_rs_pr] = tb_rs_pr[3:0];
+            tb_rs_pr = tb_rs_pr + 1;
+            repeat (2) @(posedge axi_aclk);
+        end
+
+        tb_wait_dfi_mc(4500);
+        for (tb_rs_op = 0; tb_rs_op < tb_rs_pr; tb_rs_op = tb_rs_op + 1) begin
+            if (tb_rs_arlen[tb_rs_op] == 8'd0)
+                axi_wait_r(tb_rs_rid[tb_rs_op], expected_rdata(tb_rs_raddr[tb_rs_op]));
+            else
+                axi_wait_r_burst(tb_rs_rid[tb_rs_op], tb_rs_raddr[tb_rs_op], tb_rs_arlen[tb_rs_op]);
         end
 
         repeat (20) @(posedge axi_aclk);

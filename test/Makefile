@@ -83,8 +83,10 @@ $(SIM): $(SOURCES)
 	mkdir -p $(dir $@)
 	$(IVERILOG) $(IVERFLAGS) -o $(SIM) $(SOURCES)
 
+SIM_TIMEOUT ?= 300
+
 run: build
-	$(VVP) $(SIM)
+	timeout $(SIM_TIMEOUT) $(VVP) $(SIM)
 
 test: run
 
