@@ -3,7 +3,8 @@
 # Simulation details: test/Makefile
 # Documentation details: doc/Makefile
 
-.PHONY: help clean run test build vcd wave doc doc-html ci audit syn-check formal-fifo
+.PHONY: help clean run test build vcd wave doc doc-html ci audit syn-check formal-fifo \
+        lint regress coverage formal
 
 help:
 	@echo "axi4_to_dfi_ddr (repo root)"
@@ -36,6 +37,26 @@ syn-check:
 
 formal-fifo:
 	$(MAKE) -C test formal-fifo
+
+# Standard DV gate targets (consistent with other RTL repos).
+# lint: Verilator RTL lint (delegates to test/Makefile lint-verilator).
+lint:
+	$(MAKE) -C test lint-verilator
+
+# regress: fast CI gate — lint + basic directed sim.
+regress: lint
+	$(MAKE) -C test run run-smoke run-smoke-zc run-smoke-refresh run-smoke-tras
+	@echo "[REGRESS] lint + directed sim PASSED"
+
+# coverage: Verilator C++ wrapper not yet written for this repo.
+#           See doc/FULL_FUNCTIONALITY_PLAN.md Phase 6.
+coverage:
+	@echo "[COVERAGE] Verilator C++ wrapper not yet written for this repo."
+	@echo "           Add a sim_main.cpp and wire --coverage to enable line coverage."
+	@echo "           See doc/FULL_FUNCTIONALITY_PLAN.md Phase 6 and DV_STANDARDS.md."
+
+# formal: Yosys formal targets (FIFO BMC + synthesis check).
+formal: syn-check formal-fifo
 
 audit: ci
 	$(MAKE) -C doc pdf
