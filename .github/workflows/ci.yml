@@ -19,3 +19,17 @@ jobs:
 
       - name: Simulation, smokes, elab-fail, Verilator, Yosys syn + formal
         run: make -C test ci
+
+  cocotb:
+    needs: sim-and-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update && sudo apt-get install -y iverilog
+          pip install cocotb
+
+      - name: cocotb OSS UVM-equivalent tests (DFI bridge)
+        run: make cocotb

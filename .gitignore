@@ -6,5 +6,11 @@ sim.vvp
 # Documentation build outputs (pandoc)
 doc/build/
 
+# cocotb build artifacts
+cocotb/sim_build/
+cocotb/__pycache__/
+cocotb/**/*.pyc
+cocotb/results.xml
+
 # Local Codex workspace artifacts
 .codex

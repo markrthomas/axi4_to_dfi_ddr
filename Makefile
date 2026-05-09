@@ -4,7 +4,7 @@
 # Documentation details: doc/Makefile
 
 .PHONY: help clean run test build vcd wave doc doc-html ci audit syn-check formal-fifo \
-        lint regress coverage formal
+        lint regress coverage formal cocotb
 
 help:
 	@echo "axi4_to_dfi_ddr (repo root)"
@@ -57,6 +57,9 @@ coverage:
 
 # formal: Yosys formal targets (FIFO BMC + synthesis check).
 formal: syn-check formal-fifo
+
+cocotb:
+	$(MAKE) -C $(CURDIR)/cocotb
 
 audit: ci
 	$(MAKE) -C doc pdf
