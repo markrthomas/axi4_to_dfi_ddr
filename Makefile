@@ -3,7 +3,7 @@
 # Simulation details: test/Makefile
 # Documentation details: doc/Makefile
 
-.PHONY: help clean run test build vcd wave doc doc-html ci audit syn-check formal-fifo \
+.PHONY: help clean run test sim build vcd wave doc doc-html ci audit syn-check formal-fifo \
         lint regress coverage formal cocotb
 
 help:
@@ -26,7 +26,7 @@ clean:
 	$(MAKE) -C test clean
 	$(MAKE) -C doc clean
 
-run test:
+run test sim:
 	$(MAKE) -C test run
 
 ci:
