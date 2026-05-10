@@ -5,6 +5,7 @@ sim.vvp
 
 # Documentation build outputs (pandoc)
 doc/build/
+NOTES
 
 # cocotb build artifacts
 cocotb/sim_build/
