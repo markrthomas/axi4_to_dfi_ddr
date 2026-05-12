@@ -1,0 +1,34 @@
+# async_fifo.sby — SymbiYosys formal proof for async_fifo_gray
+#
+# Two tasks share the same [script]:
+#   bmc   — bounded model check (safety: overflow, underflow, full/empty mutex)
+#   cover — reachability (FIFO fills to full, then drains to empty)
+#
+# Run all tasks:  sby -f async_fifo.sby
+# Run one task:   sby -f async_fifo.sby bmc
+#                 sby -f async_fifo.sby cover
+
+[tasks]
+bmc
+cover
+
+[options]
+bmc:   mode bmc
+cover: mode cover
+depth 55
+
+[engines]
+smtbmc
+
+[script]
+read -sv fifo_safety_top.sv cdc_fifo_lib.v
+hierarchy -top fifo_safety_top
+proc
+opt
+memory_map
+flatten
+opt
+
+[files]
+fifo_safety_top.sv
+../../src/cdc_fifo_lib.v

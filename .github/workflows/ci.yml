@@ -20,6 +20,27 @@ jobs:
       - name: Simulation, smokes, elab-fail, Verilator, Yosys syn + formal
         run: make -C test ci
 
+  coverage:
+    needs: sim-and-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y verilator
+
+      - name: Verilator coverage (DFI bridge)
+        run: make coverage
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-info
+          path: coverage.info
+          if-no-files-found: ignore
+
   cocotb:
     needs: sim-and-lint
     runs-on: ubuntu-latest

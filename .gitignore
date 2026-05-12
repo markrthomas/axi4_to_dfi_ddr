@@ -13,5 +13,9 @@ cocotb/__pycache__/
 cocotb/**/*.pyc
 cocotb/results.xml
 
+# Verilator coverage build artifacts
+obj_dir_cov/
+coverage.info
+
 # Local Codex workspace artifacts
 .codex

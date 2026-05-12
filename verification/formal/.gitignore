@@ -1,0 +1,4 @@
+# SymbiYosys build output directories
+async_fifo/
+async_fifo_bmc/
+async_fifo_cover/
