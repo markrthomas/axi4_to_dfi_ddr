@@ -1,9 +1,10 @@
 //=============================================================================
-// tb_param_smoke_refresh.v — MC_REFRESH_INTERVAL > 0: one PRE on refresh walk
+// tb_param_smoke_refresh.v — MC_REFRESH_INTERVAL > 0: PRE walk + JEDEC REF
 //
 // Cold write opens bank 0; after enough idle dfi_clk gaps the refresh counter
-// hits zero and the MC walks banks, issuing PRE on the open bank. A second
-// interval elicits another walk with no further PRE (all banks closed).
+// hits zero and the MC walks banks, issuing PRE on the open bank, then a real
+// auto-refresh (REF) command and a tRFC hold. A second interval elicits another
+// walk with no further PRE (all banks closed) but still a second REF.
 //=============================================================================
 
 `timescale 1ns / 1ps
@@ -103,6 +104,7 @@ module tb_param_smoke_refresh;
         .DFI_INIT_START_CYCLES  (0),
         .MC_REFRESH_INTERVAL    (12),
         .MC_T_RP                (2),
+        .MC_T_RFC               (5),
         .DFI_WRITE_ACK_CYCLES   (2)
     ) dut (
         .axi_aclk           (axi_aclk),
@@ -215,6 +217,16 @@ module tb_param_smoke_refresh;
             mon_pre <= mon_pre + 16'd1;
     end
 
+    // REF (auto-refresh): CS asserted, RAS=0, CAS=0, WE=1, ACT=1.
+    reg [15:0] mon_ref;
+    always @(posedge dfi_clk or negedge dfi_rst_n) begin
+        if (!dfi_rst_n)
+            mon_ref <= 16'd0;
+        else if (dfi_init_complete && !dfi_cs_n[0] && !dfi_ras_n && !dfi_cas_n &&
+                 dfi_we_n && dfi_act_n)
+            mon_ref <= mon_ref + 16'd1;
+    end
+
     integer err;
     integer w;
 
@@ -273,7 +285,7 @@ module tb_param_smoke_refresh;
             err = err + 1;
         end
 
-        // Wait for first refresh (PRE on bank 0)
+        // Wait for the first refresh walk that finds bank 0 open (issues a PRE).
         w = 0;
         while (mon_pre < 16'd1 && w < 5000) begin
             @(posedge dfi_clk);
@@ -289,12 +301,55 @@ module tb_param_smoke_refresh;
             err = err + 1;
         end
 
-        // Second countdown + walk: no open banks — PRE count unchanged
+        // Let that walk finish its auto-refresh, then confirm a REF issued.
+        repeat (40) @(posedge dfi_clk);
+        if (mon_ref < 16'd1) begin
+            $display("FAIL refresh-smoke: expected a REF command after refresh walk, got %0d", mon_ref);
+            err = err + 1;
+        end
+
+        // Second countdown + walk: no open banks — PRE count stays 1, but a real
+        // auto-refresh still issues a REF every interval, so mon_ref keeps rising.
+        w = mon_ref;
         repeat (400) @(posedge dfi_clk);
         if (mon_pre !== 16'd1) begin
             $display("FAIL refresh-smoke: expected 1 PRE after idle+second walk, got %0d", mon_pre);
             err = err + 1;
         end
+        if (mon_ref < (w + 2)) begin
+            $display("FAIL refresh-smoke: REF did not keep issuing (was %0d, now %0d)", w, mon_ref);
+            err = err + 1;
+        end
+
+        // Controller must resume normal traffic after the tRFC hold: a fresh
+        // write completes with OKAY (would hang if the REF/tRFC path deadlocked).
+        s_axi_awid    = 4'h2;
+        s_axi_awaddr  = mc_addr(3'd1, 14'd9, 10'd0);
+        s_axi_wdata   = 64'h0123_4567_89AB_CDEF;
+        s_axi_wstrb   = 8'hFF;
+        s_axi_wlast   = 1'b1;
+        s_axi_awvalid = 1'b1;
+        s_axi_wvalid  = 1'b1;
+        @(posedge axi_aclk);
+        while (!(s_axi_awready && s_axi_wready))
+            @(posedge axi_aclk);
+        s_axi_awvalid = 1'b0;
+        s_axi_wvalid  = 1'b0;
+        w = 0;
+        while (!s_axi_bvalid && w < 5000) begin
+            @(posedge axi_aclk);
+            w = w + 1;
+        end
+        if (!s_axi_bvalid) begin
+            $display("FAIL refresh-smoke: post-refresh write never completed (tRFC deadlock?)");
+            err = err + 1;
+        end else if (s_axi_bresp !== 2'b00) begin
+            $display("FAIL refresh-smoke: post-refresh BRESP=%b", s_axi_bresp);
+            err = err + 1;
+        end
+        s_axi_bready = 1'b1;
+        @(posedge axi_aclk);
+        s_axi_bready = 1'b0;
 
         if (err == 0)
             $display("PASS: tb_param_smoke_refresh (MC_REFRESH_INTERVAL>0)");

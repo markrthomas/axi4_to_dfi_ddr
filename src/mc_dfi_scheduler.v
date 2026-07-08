@@ -22,6 +22,7 @@ module mc_dfi_scheduler #(
     parameter integer MC_CL              = 6,
     parameter integer MC_RD_DV_MAX       = 16,
     parameter integer MC_REFRESH_INTERVAL = 0,
+    parameter integer MC_T_RFC           = 0,
     parameter integer WREQ_W             = 8,
     parameter integer RREQ_W             = 8,
     parameter integer BRESP_FIFO_W       = 4,
@@ -61,32 +62,34 @@ module mc_dfi_scheduler #(
     localparam integer STROBE_W = C_AXI_DATA_WIDTH / 8;
     localparam [C_AXI_ADDR_WIDTH-1:0] WADDR_INCR = C_AXI_DATA_WIDTH / 8;
     localparam integer NBANKS = (1 << DFI_BANK_WIDTH);
-    localparam [3:0] ST_IDLE      = 4'd0;
-    localparam [3:0] ST_PRE_CMD  = 4'd1;
-    localparam [3:0] ST_WAIT_RP  = 4'd2;
-    localparam [3:0] ST_ACT_CMD  = 4'd3;
-    localparam [3:0] ST_WAIT_RCD = 4'd4;
-    localparam [3:0] ST_WR_CMD   = 4'd5;
-    localparam [3:0] ST_WAIT_B   = 4'd6;
-    localparam [3:0] ST_RD_CMD   = 4'd7;
-    localparam [3:0] ST_WAIT_CL  = 4'd8;
-    localparam [3:0] ST_WAIT_DV  = 4'd9;
-    localparam [3:0] ST_PULSE_R  = 4'd10;
-    localparam [3:0] ST_RF_PRE   = 4'd11;
-    localparam [3:0] ST_RF_NEXT   = 4'd12;
-    localparam [3:0] ST_WAIT_PRE  = 4'd13;
-    localparam [3:0] ST_BURST_SLVERR_LOOP = 4'd14;
-    localparam [3:0] ST_R_PUSH          = 4'd15;
+    localparam [4:0] ST_IDLE      = 5'd0;
+    localparam [4:0] ST_PRE_CMD  = 5'd1;
+    localparam [4:0] ST_WAIT_RP  = 5'd2;
+    localparam [4:0] ST_ACT_CMD  = 5'd3;
+    localparam [4:0] ST_WAIT_RCD = 5'd4;
+    localparam [4:0] ST_WR_CMD   = 5'd5;
+    localparam [4:0] ST_WAIT_B   = 5'd6;
+    localparam [4:0] ST_RD_CMD   = 5'd7;
+    localparam [4:0] ST_WAIT_CL  = 5'd8;
+    localparam [4:0] ST_WAIT_DV  = 5'd9;
+    localparam [4:0] ST_PULSE_R  = 5'd10;
+    localparam [4:0] ST_RF_PRE   = 5'd11;
+    localparam [4:0] ST_RF_NEXT   = 5'd12;
+    localparam [4:0] ST_WAIT_PRE  = 5'd13;
+    localparam [4:0] ST_BURST_SLVERR_LOOP = 5'd14;
+    localparam [4:0] ST_R_PUSH          = 5'd15;
+    localparam [4:0] ST_RF_CMD          = 5'd16;
+    localparam [4:0] ST_WAIT_RFC        = 5'd17;
 
     reg wreq_rd_en_r;
     reg rreq_rd_en_r;
     reg [WREQ_W-1:0] wreq_snapshot;
     reg [RREQ_W-1:0] rreq_snapshot;
 
-    reg  [3:0]               mc_state;
+    reg  [4:0]               mc_state;
     reg  [7:0]               mc_ctr;
-    reg  [3:0]               mc_after_rp;
-    reg  [3:0]               mc_after_rcd;
+    reg  [4:0]               mc_after_rp;
+    reg  [4:0]               mc_after_rcd;
     reg                      mc_is_wr;
     reg  [C_AXI_ID_WIDTH-1:0] mc_id;
     reg  [C_AXI_ADDR_WIDTH-1:0] mc_addr;
@@ -111,6 +114,7 @@ module mc_dfi_scheduler #(
     reg                      rf_active;
     reg [DFI_BANK_WIDTH-1:0] rf_bank;
     reg [31:0]               refresh_ctr;
+    reg [15:0]               rfc_ctr;
     reg                      mc_wait_rf;
 
     reg [7:0]                bank_ras_cnt [0:NBANKS-1];
@@ -249,6 +253,7 @@ module mc_dfi_scheduler #(
             rf_active        <= 1'b0;
             rf_bank          <= {DFI_BANK_WIDTH{1'b0}};
             refresh_ctr      <= (MC_REFRESH_INTERVAL > 0) ? MC_REFRESH_INTERVAL[31:0] : 32'd0;
+            rfc_ctr          <= 16'd0;
             mc_wait_rf       <= 1'b0;
             for (open_row_rst_i = 0; open_row_rst_i < NBANKS; open_row_rst_i = open_row_rst_i + 1)
                 open_row_mem[open_row_rst_i] <= {MC_ROW_BITS{1'b0}};
@@ -510,15 +515,39 @@ module mc_dfi_scheduler #(
                             mc_wait_rf <= 1'b1;
                         end
                     end else if (rf_bank == {DFI_BANK_WIDTH{1'b1}}) begin
-                        rf_active   <= 1'b0;
-                        refresh_ctr <= MC_REFRESH_INTERVAL[31:0];
-                        mc_wait_rf  <= 1'b0;
-                        mc_state    <= ST_IDLE;
+                        // All banks precharged: issue the JEDEC auto-refresh (REF) command.
+                        mc_wait_rf <= 1'b0;
+                        mc_state   <= ST_RF_CMD;
                     end else begin
                         rf_bank    <= rf_bank + 1'b1;
                         mc_wait_rf <= 1'b0;
                         mc_state   <= ST_RF_NEXT;
                     end
+                end
+                ST_RF_CMD: begin
+                    // Auto-refresh (CBR): CS=0, RAS=0, CAS=0, WE=1, ACT=1; no bank select.
+                    dfi_ras_n <= 1'b0;
+                    dfi_cas_n <= 1'b0;
+                    dfi_we_n  <= 1'b1;
+                    dfi_act_n <= 1'b1;
+                    dfi_cs_n  <= {DFI_CS_WIDTH{1'b0}};
+                    if (MC_T_RFC == 0) begin
+                        rf_active   <= 1'b0;
+                        refresh_ctr <= MC_REFRESH_INTERVAL[31:0];
+                        mc_state    <= ST_IDLE;
+                    end else begin
+                        rfc_ctr  <= MC_T_RFC[15:0];
+                        mc_state <= ST_WAIT_RFC;
+                    end
+                end
+                ST_WAIT_RFC: begin
+                    // Hold refresh active (blocks FIFO pops) until tRFC elapses.
+                    if (rfc_ctr == 16'd1) begin
+                        rf_active   <= 1'b0;
+                        refresh_ctr <= MC_REFRESH_INTERVAL[31:0];
+                        mc_state    <= ST_IDLE;
+                    end else
+                        rfc_ctr <= rfc_ctr - 16'd1;
                 end
                 default: mc_state <= ST_IDLE;
             endcase

@@ -47,6 +47,7 @@ module axi4_to_dfi_bridge #(
     parameter integer MC_RD_DV_MAX = 16,
 
     parameter integer MC_REFRESH_INTERVAL = 0,
+    parameter integer MC_T_RFC     = 0,
 
     parameter integer DFI_INIT_START_CYCLES = 0,
 
@@ -202,6 +203,10 @@ module axi4_to_dfi_bridge #(
             $display("ERROR: axi4_to_dfi_bridge: MC_REFRESH_INTERVAL (%0d) must be >= 0", MC_REFRESH_INTERVAL);
             $finish(1);
         end
+        if (MC_T_RFC < 0 || MC_T_RFC > 65535) begin
+            $display("ERROR: axi4_to_dfi_bridge: MC_T_RFC (%0d) must be in 0..65535 (16-bit counter in RTL)", MC_T_RFC);
+            $finish(1);
+        end
         if (C_MAX_WRITE_AWLEN < 0 || C_MAX_WRITE_AWLEN > 255) begin
             $display("ERROR: axi4_to_dfi_bridge: C_MAX_WRITE_AWLEN (%0d) must be in 0..255", C_MAX_WRITE_AWLEN);
             $finish(1);
@@ -334,6 +339,7 @@ module axi4_to_dfi_bridge #(
         .MC_CL                 (MC_CL),
         .MC_RD_DV_MAX          (MC_RD_DV_MAX),
         .MC_REFRESH_INTERVAL   (MC_REFRESH_INTERVAL),
+        .MC_T_RFC              (MC_T_RFC),
         .DFI_INIT_START_CYCLES (DFI_INIT_START_CYCLES),
         .WREQ_W                (WREQ_W),
         .RREQ_W                (RREQ_W),

@@ -2,7 +2,7 @@
 
 Verilog RTL that connects an **AMBA AXI4** slave interface to **JEDEC DFI**-style signals aimed at a DDR PHY / memory-controller path. The design uses **two clock domains** (AXI vs DFI) with gray-code **async FIFOs** and synchronizers for CDC.
 
-This repository is a practical starting point for simulation and integration. The RTL includes an **optional** open-page scheduler with **parameterized PRE/ACT/CAS** and an **optional all-bank refresh walk** (`MC_REFRESH_INTERVAL`, default off); full JEDEC scheduling, **tRAS**/**tWR**/**tRFC** class timing, and **multi-phase DFI** are still left to a larger stack or your PHY integration.
+This repository is a practical starting point for simulation and integration. The RTL includes an **optional** open-page scheduler with **parameterized PRE/ACT/CAS** and an **optional refresh** (`MC_REFRESH_INTERVAL`, default off) that precharges open banks then issues a real **auto-refresh (REF)** command with a **`MC_T_RFC`** hold; full JEDEC scheduling (bank-group timing, `tRC`/`tRRD`/`tFAW`, …) and **multi-phase DFI** are still left to a larger stack or your PHY integration.
 
 ## Repository layout
 
@@ -11,12 +11,12 @@ This repository is a practical starting point for simulation and integration. Th
 | `src/cdc_fifo_lib.v` | `cdc_sync`, `async_fifo_gray` (gray CDC FIFO) |
 | `src/axi4_bridge_frontend.v` | AXI decode, CDC FIFOs, B/R ordering vs local SLVERR |
 | `src/dfi_adapter.v` | `dfi_init_start` / tied DFI sidebands + `mc_dfi_scheduler` |
-| `src/mc_dfi_scheduler.v` | `dfi_clk` SDRAM-style open-page MC: PRE/ACT/CAS, refresh walk, read-beat sequencing |
+| `src/mc_dfi_scheduler.v` | `dfi_clk` SDRAM-style open-page MC: PRE/ACT/CAS, refresh walk + REF/`tRFC`, read-beat sequencing |
 | `src/axi4_to_dfi_bridge.v` | Top: parameters/elabs, **`axi4_bridge_frontend`** + **`dfi_adapter`** |
 | `src/tb_axi4_to_dfi_bridge.v` | Self-contained testbench: dual clocks, PHY read model, **SLVERR** paths, **R/B** backpressure, **rresp**/**bresp** FIFO fill (depth 8), MC command counters, LFSR stress (see **Design spec** section 8) |
 | `src/tb_param_smoke.v` | Minimal second top: **`CDC_FIFO_DEPTH=16`**, **`DFI_INIT_START_CYCLES=0`**; one write and one read (**`make -C test run-smoke`**) |
 | `src/tb_param_smoke_zcycles.v` | Smoke with **`MC_T_RP`/`MC_T_RCD`/`MC_CL`/`DFI_WRITE_ACK_CYCLES` = 0**; cold write/read + row-miss write/read (**`make -C test run-smoke-zc`**) |
-| `src/tb_param_smoke_refresh.v` | Smoke with **`MC_REFRESH_INTERVAL` > 0**: cold write then **PRE** on refresh walk (**`make -C test run-smoke-refresh`**) |
+| `src/tb_param_smoke_refresh.v` | Smoke with **`MC_REFRESH_INTERVAL` > 0**: cold write, then **PRE** + auto-refresh **REF**/`tRFC` on the refresh walk (**`make -C test run-smoke-refresh`**) |
 | `src/tb_param_smoke_tras.v` | Smoke with **`MC_T_RAS`** / **`MC_T_WR`** > 0: two same-bank row-miss writes (**`make -C test run-smoke-tras`**) |
 | `src/tb_elab_fail.v` | Mis-parameterized tops for **`elab-fail-*`** / **`elab-fail-all`** (expect **`ERROR:`** then **`$finish`**) |
 | `Makefile` | Repo root shortcuts: `run`, `ci`, `clean`, `doc`, `doc-html`, etc. |
@@ -139,8 +139,8 @@ Exact bus widths are **parameters** on `axi4_to_dfi_bridge` (default 32-bit AXI 
 
 - **Clocks**: `axi_aclk` / `axi_aresetn` for AXI; `dfi_clk` / `dfi_rst_n` for DFI-side sequencing and FIFO write ports. Traffic is gated on `dfi_init_complete` from the PHY side (tie high in a simple test).
 - **AXI**: Supported transfers follow the checks encoded in the RTL: **INCR** writes with `AWLEN` ≤ `C_MAX_WRITE_AWLEN` (default **3**, i.e. up to four beats), full-width `AWSIZE`; **INCR** reads with `ARLEN` ≤ `C_MAX_READ_ARLEN` (default **3**), full-width `ARSIZE`, and all beats in one DRAM row (bank+row MSBs). Unsupported or illegal combinations are rejected with **AXI SLVERR** on the B/R channels where that logic is implemented; see **`doc/DESIGN_SPEC.md`** and the sources for the exact conditions.
-- **DFI / memory controller**: The `dfi_clk` side runs an **open-page SDRAM-style** FSM (per-bank row tracking, PRE/ACT/CAS with `MC_T_RP`, `MC_T_RCD`, `MC_CL`). AXI addresses decode as `{bank,row,col}` in the low bits (`MC_*_BITS` parameters). **Refresh** and full JEDEC timing are not implemented yet.
-- **Roadmap (in order)**: (1) memory-controller core (open-page PRE/ACT/CAS, `MC_*`) — done (`mc_dfi_scheduler.v`); (2) DFI fidelity — in progress (`dfi_act_n` on ACT, optional `dfi_init_start` pulse via `DFI_INIT_START_CYCLES`; P0–P3 phase buses still out of scope); (3) richer AXI — **INCR write** and **INCR read** bursts (parameterized `C_MAX_WRITE_AWLEN` / `C_MAX_READ_ARLEN`) done; narrow/unaligned/wrap and cross-ID ordering policies still out; (4) CDC — **`async_fifo_gray`** in `cdc_fifo_lib.v` with registered read path; next is broader FIFO formal / second-simulator coverage; (5) verification — **Icarus** CI (`make ci`) + elab guards done; next: stronger FIFO/order properties and read-burst scoreboarding; (6) **DRAM refresh** + tighter `t*` timing on the MC FSM; (7) synthesis scripts + constraints (CDC false paths); (8) docs. Local pre-release check: **`make audit`** (`ci` + PDF spec).
+- **DFI / memory controller**: The `dfi_clk` side runs an **open-page SDRAM-style** FSM (per-bank row tracking, PRE/ACT/CAS with `MC_T_RP`, `MC_T_RCD`, `MC_CL`). AXI addresses decode as `{bank,row,col}` in the low bits (`MC_*_BITS` parameters). **Refresh** issues a real auto-refresh **REF** command with a **`MC_T_RFC`** hold after precharging open banks; full JEDEC timing (bank groups, `tRC`/`tRRD`/`tFAW`, …) is not implemented yet.
+- **Roadmap (in order)**: (1) memory-controller core (open-page PRE/ACT/CAS, `MC_*`) — done (`mc_dfi_scheduler.v`); (2) DFI fidelity — in progress (`dfi_act_n` on ACT, optional `dfi_init_start` pulse via `DFI_INIT_START_CYCLES`; P0–P3 phase buses still out of scope); (3) richer AXI — **INCR write** and **INCR read** bursts (parameterized `C_MAX_WRITE_AWLEN` / `C_MAX_READ_ARLEN`) done; narrow/unaligned/wrap and cross-ID ordering policies still out; (4) CDC — **`async_fifo_gray`** in `cdc_fifo_lib.v` with registered read path; next is broader FIFO formal / second-simulator coverage; (5) verification — **Icarus** CI (`make ci`) + elab guards done; next: stronger FIFO/order properties and read-burst scoreboarding; (6) **DRAM refresh** — REF command + `MC_T_RFC` hold done; wider JEDEC `t*` (bank-group, `tRC`/`tRRD`/`tFAW`) still to do; (7) synthesis scripts + constraints (CDC false paths); (8) docs. Local pre-release check: **`make audit`** (`ci` + PDF spec).
 - **Full functionality plan**: see **`doc/FULL_FUNCTIONALITY_PLAN.md`** for the detailed implementation and testing sequence, including CDC hardening, ordered error responses, extended AXI read policies beyond the current INCR burst subset, real refresh, DFI phase support, assertions, randomized testing, and synthesis readiness gates.
 
 ## License

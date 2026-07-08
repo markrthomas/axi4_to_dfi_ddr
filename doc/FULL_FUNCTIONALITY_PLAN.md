@@ -20,7 +20,7 @@ The main gaps before full functionality are:
 - CDC FIFO read data is now registered in the read clock domain; broader formal and second-simulator evidence are still needed.
 - Immediate AXI SLVERR paths can bypass older normal responses unless ordering is made explicit.
 - The DFI side is single-phase and simplified.
-- Refresh is not JEDEC auto-refresh and has no `tRFC` tracking.
+- Refresh now issues a real JEDEC auto-refresh (REF) command with a `MC_T_RFC` hold after precharging open banks; wider JEDEC timing (bank groups, `tRC`/`tRRD`/`tFAW`) is still absent.
 - DRAM initialization, mode-register programming, calibration hooks, update handshakes, and low-power flows are not implemented.
 - Verification is mostly directed simulation plus a narrow FIFO BMC.
 
@@ -170,7 +170,7 @@ Use the existing design as a prototype and tighten it in small, testable slices:
 
 - The command monitor can run independently of the DUT implementation.
 - Every timing parameter has a test that would fail if the guard were removed.
-- Refresh includes REF and `tRFC`, not only PRE-close behavior.
+- Refresh includes REF and `tRFC`, not only PRE-close behavior. **(baseline done: `ST_RF_CMD` + `MC_T_RFC` hold)**
 
 # 7. Phase 5 - DFI Fidelity
 
@@ -267,7 +267,7 @@ Implement these first, in order:
 3. Add a second simulator target for FIFO and bridge smoke coverage.
 4. Continue modularization: dedicated AXI front-end and optional `dfi_adapter` (CDC + `mc_dfi_scheduler` are already separate files).
 5. Burst read scoreboarding and randomized read-burst stress beyond the current directed tests.
-6. Replace refresh PRE-walk with a real REF command and `tRFC` timing.
+6. **Done (baseline):** refresh now precharges open banks then issues a real auto-refresh (REF) command and holds `MC_T_RFC` before resuming (`ST_RF_CMD`/`ST_WAIT_RFC` in `mc_dfi_scheduler.v`, covered by `tb_param_smoke_refresh`). Remaining: per-bank/postponed refresh policy and `tREFI`/`tRFC` values tied to a real memory profile.
 7. Add a DFI BFM and phase-alignment checks for the intended PHY.
 
 # 11. Release Gates
