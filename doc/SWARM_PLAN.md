@@ -33,7 +33,22 @@ The existing `axi-on-ucie-to-mem` Claude Code + Railway swarm is the reference i
 
 ---
 
-# 3. Target architecture
+# 3. Current decisions and status
+
+| Topic | Status |
+|---|---|
+| Product direction | Keep the bridge simulation-oriented; prioritize CDC and verification hardening before production DDR features. |
+| Baseline | Complete; see `doc/INITIAL_ARCHITECTURE_BASELINE_REPORT.md`. |
+| Open-source local gates | `make -C test ci`, `make coverage`, `make cocotb`, and `make -C verification/formal all` pass in the checkpointed baseline. |
+| GitHub Actions | The pushed hardening checkpoint passed CI (run `32930676667`). |
+| UVM/VCS regression | Optional licensed regression. Open-source CI remains the required gate; an unavailable VCS run is reported as unavailable, not passing. |
+| Reference swarm audit | Complete; the Section 5 classification records reusable mechanics and deferred infrastructure. |
+| Task state | GitHub Issues are canonical. Version-controlled files retain architecture and decisions, not mirrored backlog/status state. |
+| Swarm infrastructure | Minimal contracts and issue intake are implemented. Provider automation and worker deployment remain deferred. |
+
+---
+
+# 4. Target architecture
 
 ```text
                          GitHub
@@ -64,7 +79,9 @@ GitHub is the shared state. Models are workers.
 
 ---
 
-# 4. Phase 0 — Preserve the known-good swarm
+# 5. Phase 0 — Preserve the known-good swarm
+
+**Status: complete (read-only audit).**
 
 The existing repository:
 
@@ -90,15 +107,31 @@ Before implementing the new swarm, document:
 
 Separate reusable swarm infrastructure from AXI/UCIe-specific knowledge.
 
+## Reference audit classification
+
+The reference repository was inspected read-only. No reference files, secrets, or
+credentials were copied.
+
+| Reference artifact or practice | Decision | Application here |
+|---|---|---|
+| Durable repository instructions and focused agent contracts (`CLAUDE.md`, `.claude/agents/`) | Adapt | Keep `.github/copilot-instructions.md` as the current durable repository guide; add narrow agent contracts only after the task-state model is approved. |
+| Manager plus read-only verification/infra roles | Adapt | Preserve explicit ownership and read-only test roles, but define roles around this repository's Icarus, Verilator, cocotb, Yosys, and optional VCS flows. |
+| Branch-per-task, checkpoint commits, PR-based human merge | Adapt | Use isolated branches for future agent-owned changes. Human-directed work may explicitly request a direct main push. |
+| Plan-driven workflow armed by document front matter | Requires human decision | The trigger pattern is reusable, but it must not be enabled until task authorization, required checks, provider authentication, and PR permissions are explicitly approved. |
+| Reference DV gate and environment matrix | Do not adopt | Its PyUVM/SystemC/UCIe-specific commands, coverage threshold, and generated EDA artifact do not apply to this AXI4-to-DFI bridge. |
+| Container image, pinned tool bundle, and memory-concurrency limits | Adapt later | Reuse only after this repository needs a reproducible containerized gate; preserve its principle of bounded parallel Verilator builds. |
+| Railway batch job and daily schedule | Do not adopt initially | Local tools plus GitHub Actions are sufficient; revisit only if persistent/scheduled workers have a demonstrated need. |
+| Provider-specific routing, secrets, and run metrics | Requires human decision | Provider selection, authentication, secret storage, token scope, and retention policy are operational decisions and must not be inferred from the reference. |
+
 ---
 
-# 5. Phase 1 — Establish `axi4_to_dfi_ddr` baseline
+# 6. Phase 1 — Establish `axi4_to_dfi_ddr` baseline
 
 **Status: complete.** `doc/INITIAL_ARCHITECTURE_BASELINE_REPORT.md` records the analysis-only baseline, open-source verification evidence, known limitations, and the reference-swarm discovery required before Phase 2.
 
 The baseline established:
 
-## Repository structure
+## Completed scope
 
 - RTL directories/files
 - testbench
@@ -109,50 +142,29 @@ The baseline established:
 - CI/GitHub Actions
 - documentation
 
-## Hardware architecture
+The report captures repository structure; AXI, DFI, CDC, reset, and scheduler architecture; open-source and UVM verification environments; and baseline command evidence. The completed hardening checkpoint also adds dual-clock FIFO simulation under Icarus and Verilator, bounded FIFO data-integrity checks, and a working coverage export.
 
-- AXI4 interface
-- internal transaction architecture
-- DFI interface
-- DDR architecture
-- clock domains
-- resets
-- FIFOs
-- state machines
-- data paths
-- CDC
-
-## Verification architecture
-
-- UVM environment
-- agents
-- drivers
-- monitors
-- sequencers
-- scoreboards
-- reference models
-- assertions
-- coverage
-- tests
-- regression scripts
-
-## Baseline evidence
-
-Determine and record:
-
-```text
-compile       PASS / FAIL / NOT AVAILABLE
-lint          PASS / FAIL / NOT AVAILABLE
-basic sim     PASS / FAIL / NOT AVAILABLE
-regression    PASS / FAIL / NOT AVAILABLE
-coverage      AVAILABLE / NOT AVAILABLE
-```
-
-The coverage export defect discovered during baseline review was corrected after explicit approval. Do not begin RTL or verification feature work until the Phase 2 entry decisions are approved.
+The coverage export defect discovered during baseline review was corrected after explicit approval. Do not create swarm infrastructure or begin unapproved feature scope until the Phase 2 entry decisions are approved.
 
 ---
 
-# 6. Phase 2 — Create swarm infrastructure
+# 7. Phase 2 — Create swarm infrastructure
+
+**Entry criteria:**
+
+1. **Complete:** audit `axi-on-ucie-to-mem` according to the baseline report's reference checklist and classify each artifact as adopt, adapt, do not adopt, or requiring a human decision.
+2. **Complete:** keep UVM/VCS as an optional licensed regression; retain open-source CI as the required gate.
+3. **Complete:** confirm the pushed GitHub Actions run completes with the intended required checks (CI run `32930676667`).
+4. **Complete:** use GitHub Issues as canonical task state; retain committed architecture and decision records only.
+
+**Implemented minimal configuration:**
+
+- `swarm/PLAN.md`, `swarm/ARCHITECTURE.md`, `swarm/DECISIONS.md`, and
+  `swarm/AGENTS.md` define the operating rules and durable context.
+- `.claude/agents/` contains coordinator, RTL/CDC, and read-only DV contracts.
+- `.github/ISSUE_TEMPLATE/swarm-task.yml` standardizes GitHub Issue intake.
+- [Issue #1](https://github.com/markrthomas/axi4_to_dfi_ddr/issues/1) is the
+  first canonical task: a true dual-clock FIFO formal model.
 
 Proposed structure:
 
@@ -162,8 +174,6 @@ axi4_to_dfi_ddr/
 +-- swarm/
 |   +-- PLAN.md
 |   +-- ARCHITECTURE.md
-|   +-- BACKLOG.md
-|   +-- STATUS.md
 |   +-- DECISIONS.md
 |   +-- AGENTS.md
 |
@@ -176,11 +186,11 @@ axi4_to_dfi_ddr/
 +-- RTL / existing project files
 ```
 
-The actual directory structure should be adapted after inspecting the repository and the reference swarm.
+The actual directory structure must be adapted only after the entry criteria are satisfied. Start with the smallest approved subset; do not introduce Railway services until local/GitHub orchestration has demonstrated a need for persistent workers.
 
 ---
 
-# 7. Agent roles
+# 8. Agent roles
 
 ## Coordinator — GitHub Copilot
 
@@ -285,7 +295,7 @@ The regression agent's job is to find failures and report them clearly.
 
 ---
 
-# 8. Git strategy
+# 9. Git strategy
 
 No agent should directly merge to `main`.
 
@@ -331,59 +341,17 @@ Avoid having multiple agents modify the same files simultaneously unless the coo
 
 ---
 
-# 9. Persistent swarm knowledge
+# 10. Persistent swarm knowledge
 
 ## `ARCHITECTURE.md`
 
 Document discovered architecture and interfaces.
 
-## `BACKLOG.md`
+## GitHub Issues
 
-Maintain prioritized work.
-
-Initial example:
-
-### P0
-
-- [x] Establish baseline (`doc/INITIAL_ARCHITECTURE_BASELINE_REPORT.md`)
-- [ ] Understand AXI4
-- [ ] Understand DFI
-- [ ] Understand DDR architecture
-
-### P1
-
-- [ ] AXI4 protocol verification
-- [ ] DFI protocol verification
-- [ ] Basic write path
-- [ ] Basic read path
-
-### P2
-
-- [ ] Burst testing
-- [ ] Backpressure
-- [ ] Random traffic
-- [ ] Error handling
-- [ ] Coverage
-
-### P3
-
-- [ ] Stress testing
-- [ ] Performance
-- [ ] Corner cases
-
-## `STATUS.md`
-
-Example:
-
-```text
-Agent       Task             Status
------------------------------------------
-Copilot     Architecture     DONE
-Codex       AXI4 RTL         WORKING
-K3          DFI analysis     WORKING
-Claude      UVM              WAITING
-Regression  Baseline         PASS
-```
+GitHub Issues are the canonical task backlog, assignment, and status system.
+Every swarm task must identify its issue, expected evidence, owning branch, and
+reviewer. Do not mirror issue state into committed Markdown files.
 
 ## `DECISIONS.md`
 
@@ -417,7 +385,7 @@ Define:
 
 ---
 
-# 10. Model independence
+# 11. Model independence
 
 Do not hard-code the engineering process around a particular model.
 
@@ -450,9 +418,13 @@ without redesigning the swarm.
 
 ---
 
-# 11. Verification quality gates
+# 12. Verification quality gates
 
 A task is not complete because the RTL compiles.
+
+The required gate is the repository's open-source CI flow. VCS/UVM is an
+optional licensed regression: run it when the licensed environment is available,
+but report an unavailable run distinctly rather than converting it into a pass.
 
 Preferred progression:
 
@@ -480,7 +452,7 @@ For example, "implement AXI burst handling" is incomplete until appropriate burs
 
 ---
 
-# 12. Model benchmark
+# 13. Model benchmark
 
 Before permanently assigning every role, benchmark the models on the actual repository.
 
@@ -511,7 +483,7 @@ Use actual results to determine final role assignments.
 
 ---
 
-# 13. Railway
+# 14. Railway
 
 Railway is not required for the initial implementation.
 
@@ -537,7 +509,7 @@ If needed, reproduce the proven Railway architecture from `axi-on-ucie-to-mem`.
 
 ---
 
-# 14. Security
+# 15. Security
 
 Never commit:
 
@@ -555,20 +527,15 @@ Agents must not print or expose secrets in logs, PRs, or swarm status files.
 
 ---
 
-# 15. First milestone
+# 16. Initial milestone
 
-The first milestone is NOT to implement the DDR controller.
+The initial completed milestone was not to implement the DDR controller or swarm infrastructure. It was:
 
-The first milestone is:
-
-> Establish a functioning multi-model swarm with a reproducible repository baseline.
+> Establish a reproducible repository baseline and obtain human approval for the next swarm phase.
 
 Success means:
 
 ```text
-Codex CLI
-   |
-   v
 Read SWARM_PLAN.md
    |
    v
@@ -581,39 +548,18 @@ Establish baseline
 Create architecture report
    |
    v
-Create backlog
-   |
-   v
-Design first agent tasks
-   |
-   v
-Launch agents
-   |
-   v
-Isolated branches
-   |
-   v
-Tests / PRs
-   |
-   v
 Human review
 ```
 
 ---
 
-# 16. First Codex mission
+# 17. Completed initial analysis mission
 
-The first Codex session should be analysis-only.
-
-Prompt:
-
-> Read `SWARM_PLAN.md`. Do not modify RTL or verification code. Inspect the `axi4_to_dfi_ddr` repository and produce an initial architecture and baseline report. Identify the repository structure, AXI4 architecture, DFI/DDR architecture, verification environment, available simulations/regressions, and current failures. Also identify what information we need from the existing `axi-on-ucie-to-mem` repository before implementing the swarm. Create/update only planning documentation required by this mission. Do not implement swarm infrastructure yet.
-
-After this report, review it manually before allowing Codex to proceed.
+The initial analysis-only mission is complete and its result is `doc/INITIAL_ARCHITECTURE_BASELINE_REPORT.md`. The next swarm task is the Section 5 reference audit, not RTL implementation or worker deployment.
 
 ---
 
-# 17. Development philosophy
+# 18. Development philosophy
 
 This is an engineering swarm, not a collection of autonomous code generators.
 

@@ -1,0 +1,36 @@
+name: Swarm task
+description: Create a scoped task for the AXI4-to-DFI swarm.
+title: "[swarm] "
+labels: ["swarm"]
+body:
+  - type: markdown
+    attributes:
+      value: "Tasks are canonical GitHub Issue state. See `swarm/PLAN.md` before assignment."
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: Define the problem, in-scope files, and explicitly excluded work.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: State observable behavior and expected evidence.
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification
+      description: List required Makefile commands and any optional licensed gate.
+    validations:
+      required: true
+  - type: input
+    id: reviewer
+    attributes:
+      label: Human reviewer
+      description: Name the reviewer responsible for merge approval.
+    validations:
+      required: true
