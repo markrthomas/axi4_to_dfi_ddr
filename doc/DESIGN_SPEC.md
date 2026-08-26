@@ -191,6 +191,8 @@ Simulation uses **Icarus Verilog** (`iverilog -g2001`). The testbench **`src/tb_
 
 **`make formal-fifo`** (optional): **Yosys** bounded **`sat -prove-asserts`** on **`formal/fifo_safety_top.sv`**, a single-clock instance of **`async_fifo_gray`** with phased reset and host **`assume`** on **`full`**/**`empty`** (see **`formal/README.md`**). This is **not** a substitute for CDC signoff on unrelated clock ratios.
 
+**`make formal-fifo-dual-clock`**: separate SymbiYosys/Boolector bounded proof on a depth-4 FIFO with independent symbolic write/read clocks and independently released resets. A shadow queue checks accepted-read ordering/no duplication and bounds an undelivered head under explicit legal-host assumptions: each clock progresses, writes/reads obey their local flags, traffic starts only after reset settling, and the read host eagerly consumes valid registered output. It neither changes nor weakens the RTL registered-read contract. This is bounded digital evidence only; arbitrary stalled consumers, resets with in-flight data, unbounded parameters/traffic, simultaneous clock edges, metastability/MTBF, and physical CDC implementation remain outside the proof.
+
 **`tb_param_smoke_tras`** instantiates the DUT with **`MC_T_RAS`** and **`MC_T_WR`** both **> 0** and runs two same-bank row-miss writes (see **`make -C test run-smoke-tras`**).
 
 **`tb_async_fifo_gray`** independently drives the FIFO write and read clocks at different rates. It verifies that all **`DEPTH`** entries can be written before **`wr_full`** asserts, registered read data stays stable while stalled, and concurrent producer/consumer traffic preserves ordering (see **`make -C test run-fifo`**).
@@ -229,6 +231,7 @@ Build and run: **`make -C test run`**; full automation: **`make -C test ci`** (s
 | 0.18 | Remove old response-drain spacing from the main testbench; response wait tasks now settle FIFO NBA updates before returning. |
 | 0.19 | **INCR** read bursts (**`C_MAX_READ_ARLEN`**, one-row constraint, **`RLAST`** / **`rresp`** FIFO); RTL split **`cdc_fifo_lib.v`** + **`mc_dfi_scheduler.v`**; **`r_legal`** same-cycle **AR+R** fix; doc alignment with implementation. |
 | 0.20 | **`axi4_bridge_frontend.v`** + **`dfi_adapter.v`**: AXI/FIFO front-end vs DFI/MC shell; **`fifo_safety_top`** assumes at most one of **`wr_en`/`rd_en`** per cycle (BMC-friendly underapproximation). |
+| 0.21 | Separate SymbiYosys true dual-clock FIFO bounded integrity harness with independent clock/reset release, a shadow queue, and documented host/CDC limitations. |
 
 # Document control
 

@@ -13,7 +13,7 @@ BRIDGE_SRCS := src/cdc_fifo_lib.v src/mc_dfi_scheduler.v src/axi4_bridge_fronten
                src/dfi_adapter.v src/axi4_to_dfi_bridge.v
 COV_DIR := obj_dir_cov
 
-.PHONY: help clean run test sim build vcd wave doc doc-html ci audit syn-check formal-fifo \
+.PHONY: help clean run test sim build vcd wave doc doc-html ci audit syn-check formal-fifo formal-fifo-dual-clock \
         lint regress coverage formal cocotb
 
 help:
@@ -30,6 +30,7 @@ help:
 	@echo "  make clean     - remove test/build/ and doc/build/"
 	@echo "  make syn-check   - Yosys elaboration on syn/yosys.ys (skip if yosys missing)"
 	@echo "  make formal-fifo - Yosys BMC on formal/fifo_safety_top.sv (skip if yosys missing)"
+	@echo "  make formal-fifo-dual-clock - SymbiYosys dual-clock FIFO BMC (skip if sby missing)"
 	@echo "See README.md for full instructions and per-directory make -C usage."
 
 clean:
@@ -48,6 +49,9 @@ syn-check:
 
 formal-fifo:
 	$(MAKE) -C test formal-fifo
+
+formal-fifo-dual-clock:
+	$(MAKE) -C verification/formal dual-clock
 
 # Standard DV gate targets (consistent with other RTL repos).
 # lint: Verilator RTL lint (delegates to test/Makefile lint-verilator).

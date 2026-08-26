@@ -27,7 +27,7 @@ This repository is a practical starting point for simulation and integration. Th
 | `doc/Makefile` | `pdf`, `html`, `clean` (outputs under `doc/build/`) |
 | `syn/yosys.ys` | Optional **Yosys** elaboration/synthesis sanity script for the bridge top |
 | `syn/constraints.sdc` | Commented **SDC** hints (CDC false paths); not read by Yosys script |
-| `formal/README.md` | **Yosys-only** FIFO BMC (`formal-fifo`); notes on optional SymbiYosys later |
+| `formal/README.md` | Legacy Yosys FIFO BMC (`formal-fifo`) and true dual-clock SymbiYosys BMC (`formal-fifo-dual-clock`) |
 | `formal/yosys_fifo_safety.ys` | Yosys script: bounded **`sat -prove-asserts`** on **`fifo_safety_top.sv`** |
 | `LICENSE` | MIT |
 
@@ -72,6 +72,7 @@ make -C test run-fifo-verilator # same FIFO test under Verilator timing
 make -C test elab-fail-all  # illegal parameters must fail with ERROR:
 make -C test lint-verilator  # optional; skips if verilator not installed
 make -C test ci       # run + four smokes + elab-fail-all + lint + syn-check + formal-fifo (yosys optional)
+make formal-fifo-dual-clock  # bounded true dual-clock FIFO integrity (sby + Boolector)
 make -C test vcd
 make -C test wave
 ```
