@@ -91,9 +91,9 @@ A **single-transaction** SDRAM-style **open-page** FSM drives `dfi_*` (one AXI-e
 
 **Timing (dfi_clk cycles):** `MC_T_RP`, `MC_T_RCD`, `MC_CL` (read CAS to read-data phase), `DFI_WRITE_ACK_CYCLES` (after WRITE CAS before **B** is pushed into `u_fifo_bresp`), `MC_RD_DV_MAX` (valid wait after `MC_CL`). A value of **0** for `MC_T_RP`, `MC_T_RCD`, `MC_CL`, `MC_T_RAS`, or `MC_T_WR` skips the corresponding wait (no counter underflow for **`MC_T_RAS`/`MC_T_WR`** means **PRE** is not delayed by that constraint). **`DFI_WRITE_ACK_CYCLES = 0`** means **no** extra turnaround cycles after WRITE CAS; the FSM still spends **one** `dfi_clk` in **`ST_WAIT_B`** with **`mc_ctr == 1`** so **`bresp_wr_en`** can fire (combinational **B** push requires that state).
 
-**Refresh (optional):** parameter **`MC_REFRESH_INTERVAL`** (default **0** = disabled). When **> 0**, a counter decrements only in **`ST_IDLE`** gaps when **`dfi_mc_ready`** is true and no request snapshot is pending (**`!wreq_rd_en_r && !rreq_rd_en_r`**). At **0**, the FSM walks banks **0 … 2^`DFI_BANK_WIDTH`-1**; for each bank with an open row (**`row_open_mask`**), it issues the same **PRE** encoding as normal traffic, waits **`MC_T_RP`**, then continues. Request FIFO pops are blocked while the counter is **0** or while **`rf_active`**. After the walk, **`refresh_ctr`** reloads to **`MC_REFRESH_INTERVAL`**.
+**Refresh (optional):** parameter **`MC_REFRESH_INTERVAL`** (default **0** = disabled). When **> 0**, a counter decrements only in **`ST_IDLE`** gaps when **`dfi_mc_ready`** is true and no request snapshot is pending (**`!wreq_rd_en_r && !rreq_rd_en_r`**). At **0**, the FSM walks banks **0 … 2^`DFI_BANK_WIDTH`-1**; for each bank with an open row (**`row_open_mask`**), it issues the same **PRE** encoding as normal traffic, waits **`MC_T_RP`**, then continues. It then emits the JEDEC auto-refresh **REF** command and blocks request FIFO pops for **`MC_T_RFC`** cycles. After the hold, **`refresh_ctr`** reloads to **`MC_REFRESH_INTERVAL`**.
 
-**Not in this block:** JEDEC-accurate **REF** command (auto-refresh) timing, full **tRFC**/**tRC** bookkeeping, **DFI P0–P3** phasing.
+**Not in this block:** a target-memory timing profile and wider JEDEC timing (**`tRC`**, **`tRRD`**, **`tFAW`**, bank-group timing, refresh postponement/pull-in), or **DFI P0–P3** phasing.
 
 # 4. Data paths
 
@@ -192,6 +192,8 @@ Simulation uses **Icarus Verilog** (`iverilog -g2001`). The testbench **`src/tb_
 **`make formal-fifo`** (optional): **Yosys** bounded **`sat -prove-asserts`** on **`formal/fifo_safety_top.sv`**, a single-clock instance of **`async_fifo_gray`** with phased reset and host **`assume`** on **`full`**/**`empty`** (see **`formal/README.md`**). This is **not** a substitute for CDC signoff on unrelated clock ratios.
 
 **`tb_param_smoke_tras`** instantiates the DUT with **`MC_T_RAS`** and **`MC_T_WR`** both **> 0** and runs two same-bank row-miss writes (see **`make -C test run-smoke-tras`**).
+
+**`tb_async_fifo_gray`** independently drives the FIFO write and read clocks at different rates. It verifies that all **`DEPTH`** entries can be written before **`wr_full`** asserts, registered read data stays stable while stalled, and concurrent producer/consumer traffic preserves ordering (see **`make -C test run-fifo`**).
 
 The response FIFO read path is registered, so **`RDATA`**, **`RID`**, and **`BID`** remain stable while valid is asserted and the corresponding ready is low. Some stress and FIFO-fill sequences still include small deterministic gaps to keep issue order and scoreboard expectations simple.
 

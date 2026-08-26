@@ -67,6 +67,8 @@ make -C test run-smoke   # alternate depth: tb_param_smoke (CDC_FIFO_DEPTH=16)
 make -C test run-smoke-zc   # zero-cycle MC timing smoke
 make -C test run-smoke-refresh  # MC_REFRESH_INTERVAL refresh PRE
 make -C test run-smoke-tras     # MC_T_RAS / MC_T_WR row-miss writes
+make -C test run-fifo           # dual-clock async FIFO self-check
+make -C test run-fifo-verilator # same FIFO test under Verilator timing
 make -C test elab-fail-all  # illegal parameters must fail with ERROR:
 make -C test lint-verilator  # optional; skips if verilator not installed
 make -C test ci       # run + four smokes + elab-fail-all + lint + syn-check + formal-fifo (yosys optional)

@@ -11,6 +11,8 @@
 #   run-smoke-zc  tb_param_smoke_zcycles (zero MC/PHY timing waits + row change)
 #   run-smoke-refresh  tb_param_smoke_refresh (MC_REFRESH_INTERVAL>0, PRE on walk)
 #   run-smoke-tras  tb_param_smoke_tras (MC_T_RAS / MC_T_WR > 0, row-miss write)
+#   run-fifo  Dual-clock async FIFO self-check
+#   run-fifo-verilator  Dual-clock async FIFO self-check using Verilator timing
 #   elab-fail-*  Expect ERROR: from parameter guards (see tb_elab_fail.v)
 #   lint-verilator  Verilator --lint-only on bridge RTL (optional tool)
 #   syn-check  Yosys hierarchy/opt on ../syn/yosys.ys (skip if yosys not in PATH)
@@ -42,6 +44,11 @@ SMOKE_RF_SRC := $(BRIDGE_SRC) $(SRC_DIR)/tb_param_smoke_refresh.v
 SMOKE_TRAS_TOP := tb_param_smoke_tras
 SMOKE_TRAS_SIM := $(BUILD_DIR)/smoke_tras.vvp
 SMOKE_TRAS_SRC := $(BRIDGE_SRC) $(SRC_DIR)/tb_param_smoke_tras.v
+FIFO_TOP := tb_async_fifo_gray
+FIFO_SIM := $(BUILD_DIR)/fifo.vvp
+FIFO_SRC := $(SRC_DIR)/cdc_fifo_lib.v $(SRC_DIR)/tb_async_fifo_gray.v
+FIFO_VLT_DIR := $(BUILD_DIR)/fifo_verilator
+FIFO_VLT_SIM := $(FIFO_VLT_DIR)/V$(FIFO_TOP)
 ELAB_FAIL_SRC := $(BRIDGE_SRC) $(SRC_DIR)/tb_elab_fail.v
 
 IVERILOG  := $(shell command -v iverilog)
@@ -51,7 +58,7 @@ VERILATOR := verilator
 # Lint-only: waive width/unused on this Verilog-2001 bridge (AXI tie-offs, FIFO PTRW ternary).
 VERILINT  := $(VERILATOR) --lint-only -Wall -Wno-DECLFILENAME -Wno-WIDTH -Wno-UNUSED
 
-.PHONY: all build run test run-smoke run-smoke-zc run-smoke-refresh run-smoke-tras \
+.PHONY: all build run test run-smoke run-smoke-zc run-smoke-refresh run-smoke-tras run-fifo run-fifo-verilator \
 	elab-fail-width elab-fail-depth elab-fail-addrmap elab-fail-fifo \
 	elab-fail-mcwide elab-fail-dfiinit-neg elab-fail-dfiinit-ovf elab-fail-all \
 	lint-verilator syn-check formal-fifo ci vcd wave clean help doc doc-html
@@ -59,13 +66,15 @@ VERILINT  := $(VERILATOR) --lint-only -Wall -Wno-DECLFILENAME -Wno-WIDTH -Wno-UN
 all: run
 
 help:
-	@echo "Targets: build run test run-smoke run-smoke-zc run-smoke-refresh run-smoke-tras elab-fail-* elab-fail-all lint-verilator syn-check formal-fifo ci vcd wave doc doc-html clean help"
+	@echo "Targets: build run test run-smoke run-smoke-zc run-smoke-refresh run-smoke-tras run-fifo run-fifo-verilator elab-fail-* elab-fail-all lint-verilator syn-check formal-fifo ci vcd wave doc doc-html clean help"
 	@echo "  build  - compile to $(SIM)"
 	@echo "  run    - compile (if needed) and run tests"
 	@echo "  run-smoke - compile $(SMOKE_SIM) and run tb_param_smoke"
 	@echo "  run-smoke-zc - zero-cycle MC timing + row-miss smoke ($(SMOKE_ZC_SIM))"
 	@echo "  run-smoke-refresh - MC_REFRESH_INTERVAL + refresh PRE ($(SMOKE_RF_SIM))"
 	@echo "  run-smoke-tras - MC_T_RAS / MC_T_WR row-miss ($(SMOKE_TRAS_SIM))"
+	@echo "  run-fifo - dual-clock async FIFO self-check ($(FIFO_SIM))"
+	@echo "  run-fifo-verilator - FIFO self-check using Verilator timing (skip if unavailable)"
 	@echo "  elab-fail-all - seven illegal configs must print ERROR: and finish"
 	@echo "  lint-verilator - Verilator lint on RTL sources (skip if no verilator)"
 	@echo "  syn-check - Yosys on ../syn/yosys.ys (skip if no yosys)"
@@ -117,6 +126,23 @@ $(SMOKE_TRAS_SIM): $(SMOKE_TRAS_SRC)
 
 run-smoke-tras: $(SMOKE_TRAS_SIM)
 	$(VVP) $(SMOKE_TRAS_SIM)
+
+$(FIFO_SIM): $(FIFO_SRC)
+	mkdir -p $(dir $@)
+	$(IVERILOG) $(IVERFLAGS) -o $@ -s $(FIFO_TOP) $(FIFO_SRC)
+
+run-fifo: $(FIFO_SIM)
+	$(VVP) $(FIFO_SIM)
+
+run-fifo-verilator:
+	@if command -v $(VERILATOR) >/dev/null 2>&1; then \
+		rm -rf $(FIFO_VLT_DIR); \
+		$(VERILATOR) --binary --timing --top-module $(FIFO_TOP) \
+			--Mdir $(FIFO_VLT_DIR) -Wno-fatal -Wno-DECLFILENAME -Wno-WIDTH $(FIFO_SRC) && \
+		$(FIFO_VLT_SIM); \
+	else \
+		echo "SKIP: verilator not in PATH"; \
+	fi
 
 elab-fail-width: $(ELAB_FAIL_SRC)
 	mkdir -p $(BUILD_DIR)
@@ -182,7 +208,7 @@ formal-fifo:
 		echo "SKIP: yosys not in PATH"; \
 	fi
 
-ci: run run-smoke run-smoke-zc run-smoke-refresh run-smoke-tras elab-fail-all lint-verilator syn-check formal-fifo
+ci: run run-smoke run-smoke-zc run-smoke-refresh run-smoke-tras run-fifo run-fifo-verilator elab-fail-all lint-verilator syn-check formal-fifo
 
 vcd: build
 	$(VVP) $(SIM) +vcd

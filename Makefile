@@ -72,7 +72,8 @@ coverage:
 		$(VERILATOR_CPP) -pthread -lm
 	cd $(COV_DIR) && ./sim_cov
 	@if command -v verilator_coverage >/dev/null 2>&1; then \
-		verilator_coverage --write-info ../coverage.info $(COV_DIR)/coverage.dat; \
+		cd $(COV_DIR) && verilator_coverage --write-info ../coverage.info coverage.dat && \
+		test -s ../coverage.info && \
 		echo "[COVERAGE] coverage.info written"; \
 	else \
 		echo "[COVERAGE] coverage.dat in $(COV_DIR) (install verilator for lcov export)"; \

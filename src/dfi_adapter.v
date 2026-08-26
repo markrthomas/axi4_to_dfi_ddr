@@ -25,10 +25,11 @@ module dfi_adapter #(
     parameter integer MC_REFRESH_INTERVAL = 0,
     parameter integer MC_T_RFC     = 0,
     parameter integer DFI_INIT_START_CYCLES = 0,
-    parameter integer WREQ_W       = 8,
-    parameter integer RREQ_W       = 8,
-    parameter integer BRESP_FIFO_W = 4,
-    parameter integer RRESP_FIFO_W = 8
+    parameter integer WREQ_W       = 1 + C_AXI_ID_WIDTH + C_AXI_ADDR_WIDTH +
+                                     C_AXI_DATA_WIDTH + (C_AXI_DATA_WIDTH / 8),
+    parameter integer RREQ_W       = 8 + C_AXI_ID_WIDTH + C_AXI_ADDR_WIDTH,
+    parameter integer BRESP_FIFO_W = C_AXI_ID_WIDTH,
+    parameter integer RRESP_FIFO_W = 1 + 1 + C_AXI_ID_WIDTH + C_AXI_DATA_WIDTH
 ) (
     input  wire                          dfi_clk,
     input  wire                          dfi_rst_n,

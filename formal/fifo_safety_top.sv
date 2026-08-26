@@ -6,9 +6,10 @@
 //
 // wr_clk == rd_clk == clk. Assumes host obeys !full / !empty.
 //
-// Strengthening vs baseline: bounded depth, full/empty mutex, and **at most one
-// of wr_en / rd_en per cycle** (legal subset; RTL still supports same-edge
-// wr+rd in real use). A shadow occupancy counter matches legal push/pop steps.
+// Strengthening vs baseline: bounded depth, full/empty mutex, in-order data
+// delivery, and **at most one of wr_en / rd_en per cycle** (legal subset; RTL
+// still supports same-edge wr+rd in real use). A shadow FIFO mirrors legal
+// push/pop steps.
 
 `timescale 1ns / 1ps
 
@@ -56,19 +57,30 @@ module fifo_safety_top (
     );
 
     reg [3:0] shadow_depth;
+    reg [2:0] shadow_wptr;
+    reg [2:0] shadow_rptr;
+    reg [WIDTH-1:0] shadow_mem [0:DEPTH-1];
     wire      inc = wr_en && (shadow_depth < DEPTH);
     wire      dec = rd_en && (shadow_depth > 0);
 
     always @(posedge clk) begin
-        if (!eff_rst_n)
+        if (!eff_rst_n) begin
             shadow_depth <= 4'd0;
-        else begin
+            shadow_wptr  <= 3'd0;
+            shadow_rptr  <= 3'd0;
+        end else begin
             case ({ inc, dec })
                 2'b10:   shadow_depth <= shadow_depth + 4'd1;
                 2'b01:   shadow_depth <= shadow_depth - 4'd1;
                 2'b11:   ;
                 default: ;
             endcase
+            if (inc) begin
+                shadow_mem[shadow_wptr] <= wr_data;
+                shadow_wptr <= shadow_wptr + 3'd1;
+            end
+            if (dec)
+                shadow_rptr <= shadow_rptr + 3'd1;
         end
     end
 
@@ -82,6 +94,8 @@ module fifo_safety_top (
         if (eff_rst_n) begin
             assert (shadow_depth <= DEPTH);
             assert (!(full && empty));
+            if (rd_en)
+                assert (rd_data == shadow_mem[shadow_rptr]);
         end
     end
 

@@ -81,7 +81,9 @@ module async_fifo_gray #(
     wire [PTRW-1:0] wptr_full_cmp =
         (PTRW > 2) ? {~rptr_gray_wr[PTRW-1:PTRW-2], rptr_gray_wr[PTRW-3:0]} :
                      {~rptr_gray_wr[PTRW-1:PTRW-2]};
-    wire full_int = (wptr_gray_next == wptr_full_cmp);
+    // `wr_full` describes the current pointer state. Comparing the current
+    // pointer leaves the final available slot writable, then asserts full.
+    wire full_int = (wptr_gray == wptr_full_cmp);
     assign wr_full = full_int;
 
     reg [WIDTH-1:0] rd_data_q;

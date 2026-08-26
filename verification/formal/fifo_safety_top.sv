@@ -17,10 +17,12 @@
 // Assertions:
 //   - shadow depth counter stays <= DEPTH
 //   - full and empty are never both true
+//   - a symbolic watched write is returned when its queued position is consumed
 //
 // Cover goals (checked by sby cover task):
 //   - FIFO fills to full and then drains to empty
 //   - at least one full push-then-pop completes
+//   - watched payload tracking reaches a checked read
 
 `timescale 1ns / 1ps
 
@@ -69,7 +71,7 @@ module fifo_safety_top (
         .rd_empty (empty)
     );
 
-    // Shadow occupancy counter for assertion checking.
+    // Shadow occupancy counter.
     reg [3:0] shadow_depth;
     wire      inc = wr_en && (shadow_depth < DEPTH);
     wire      dec = rd_en && (shadow_depth > 0);
@@ -87,6 +89,30 @@ module fifo_safety_top (
         end
     end
 
+    // Track one symbolic payload without introducing an 8-entry symbolic RAM
+    // into the depth-55 BMC. Its `ahead` count is the number of earlier words.
+    (* anyconst *) reg [WIDTH-1:0] watched_data;
+    reg watched_pending;
+    reg [3:0] watched_ahead;
+    wire watch_write = inc && !watched_pending && (wr_data == watched_data);
+
+    always @(posedge clk) begin
+        if (!eff_rst_n) begin
+            watched_pending <= 1'b0;
+            watched_ahead   <= 4'd0;
+        end else begin
+            if (watch_write) begin
+                watched_pending <= 1'b1;
+                watched_ahead   <= shadow_depth;
+            end else if (dec && watched_pending) begin
+                if (watched_ahead == 4'd0)
+                    watched_pending <= 1'b0;
+                else
+                    watched_ahead <= watched_ahead - 4'd1;
+            end
+        end
+    end
+
     // Assumptions: legal host behaviour.
     always @(*) begin
         assume (!(wr_en && full));
@@ -99,6 +125,8 @@ module fifo_safety_top (
         if (eff_rst_n) begin
             assert (shadow_depth <= DEPTH);
             assert (!(full && empty));
+            if (dec && watched_pending && (watched_ahead == 4'd0))
+                assert (rd_data == watched_data);
         end
     end
 
@@ -117,6 +145,9 @@ module fifo_safety_top (
             cover(full);
             // Cover: after having been full, FIFO drains to empty.
             cover(f_ever_full && empty);
+            // Cover: the symbolic data-integrity assertion is exercised.
+            cover(watched_pending);
+            cover(dec && watched_pending && (watched_ahead == 4'd0));
         end
     end
 

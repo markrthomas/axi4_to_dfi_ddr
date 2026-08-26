@@ -18,7 +18,7 @@ The current RTL is a useful bring-up bridge, not a complete DDR controller. It a
 The main gaps before full functionality are:
 
 - CDC FIFO read data is now registered in the read clock domain; broader formal and second-simulator evidence are still needed.
-- Immediate AXI SLVERR paths can bypass older normal responses unless ordering is made explicit.
+- Local AXI SLVERR paths are ordered behind older legal same-channel responses by outstanding-response counters, but the implementation supports only one held/pending local error per channel and is not yet a general response-queue architecture.
 - The DFI side is single-phase and simplified.
 - Refresh now issues a real JEDEC auto-refresh (REF) command with a `MC_T_RFC` hold after precharging open banks; wider JEDEC timing (bank groups, `tRC`/`tRRD`/`tFAW`) is still absent.
 - DRAM initialization, mode-register programming, calibration hooks, update handshakes, and low-power flows are not implemented.
@@ -50,7 +50,7 @@ Use the existing design as a prototype and tighten it in small, testable slices:
 
 ## Tests
 
-- Add FIFO unit tests with tight back-to-back read/write handshakes and varied clock ratios.
+- **Done (baseline hardening):** `tb_async_fifo_gray` drives asynchronous write/read clocks, fills the configured FIFO depth, checks registered-read stability while stalled, and verifies concurrent producer/consumer ordering (`make -C test run-fifo`).
 - Add same-ID ordering tests:
   - legal read followed by illegal AR.
   - legal write followed by illegal AW/W.
@@ -65,7 +65,7 @@ Use the existing design as a prototype and tighten it in small, testable slices:
 ## Exit Criteria
 
 - `make -C test ci` passes with the registered FIFO read path.
-- A second simulator runs the FIFO and bridge smoke tests cleanly.
+- **Done (baseline hardening):** Icarus and Verilator timing both run `tb_async_fifo_gray` cleanly (`make -C test run-fifo` and `make -C test run-fifo-verilator`).
 - Formal FIFO proof covers at least the configured CI depth and representative smaller depths.
 
 # 4. Phase 2 - Module Boundaries
@@ -262,7 +262,7 @@ Use the existing design as a prototype and tighten it in small, testable slices:
 
 Implement these first, in order:
 
-1. Strengthen FIFO formal checks for no loss, duplication, or reordering (baseline: shadow depth + mutex + **no same-cycle wr+rd** in `fifo_safety_top`; add scoreboard / `$past` or SymbiYosys for data + dual-clock).
+1. Extend FIFO formal beyond the current single-clock abstraction to true dual-clock data-integrity and ordering properties. The legacy Yosys harness now checks an in-order shadow FIFO; the SymbiYosys BMC checks a symbolic watched payload, but both retain host-safe and no-simultaneous-operation assumptions.
 2. Replace the initial local-SLVERR pending logic with unified ordered response queues if future AXI features need more than one pending local error per channel.
 3. Add a second simulator target for FIFO and bridge smoke coverage.
 4. Continue modularization: dedicated AXI front-end and optional `dfi_adapter` (CDC + `mc_dfi_scheduler` are already separate files).
