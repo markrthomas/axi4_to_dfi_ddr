@@ -17,7 +17,7 @@ class dfi_seq_item #(
         `uvm_field_enum(dfi_cmd_e,    cmd,     UVM_ALL_ON)
         `uvm_field_int (address,               UVM_ALL_ON)
         `uvm_field_int (bank,                  UVM_ALL_ON)
-        `uvm_field_time(timestamp,             UVM_ALL_ON)
+        `uvm_field_int (timestamp,             UVM_ALL_ON)
     `uvm_object_utils_end
 
     dfi_cmd_e              cmd;

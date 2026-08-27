@@ -1,0 +1,75 @@
+name: UVM on Verilator
+
+# Builds and runs the SystemVerilog UVM environment (uvm/) under open-source
+# Verilator via uvm_dv/vlt/Makefile. The apt/system Verilator is NOT UVM-capable,
+# so this builds Verilator 5.050 from source and uses the UVM library bundled in
+# its source tree (test_regress/t/uvm) as UVM_HOME. The cloud runner has the RAM
+# the local host lacks for the large --binary C++ compile.
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+env:
+  VERILATOR_REF: v5.050
+  VERILATOR_PREFIX: /home/runner/verilator-install
+
+jobs:
+  uvm-verilator:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check out repository code
+      uses: actions/checkout@v4
+
+    - name: Cache Verilator install
+      id: cache-verilator
+      uses: actions/cache@v4
+      with:
+        path: ${{ env.VERILATOR_PREFIX }}
+        key: ${{ runner.os }}-verilator-${{ env.VERILATOR_REF }}-uvm
+
+    - name: Build UVM-capable Verilator (on cache miss)
+      if: steps.cache-verilator.outputs.cache-hit != 'true'
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install -y \
+          git help2man perl python3 make autoconf g++ flex bison ccache \
+          libgoogle-perftools-dev numactl perl-doc libfl2 libfl-dev \
+          zlib1g zlib1g-dev
+        git clone --depth 1 --branch "$VERILATOR_REF" \
+          https://github.com/verilator/verilator verilator-src
+        cd verilator-src
+        autoconf
+        ./configure --prefix="$VERILATOR_PREFIX"
+        make -j"$(nproc)"
+        make install
+        mkdir -p "$VERILATOR_PREFIX/uvm"
+        cp -a test_regress/t/uvm/. "$VERILATOR_PREFIX/uvm/"
+
+    - name: Put Verilator on PATH
+      run: echo "$VERILATOR_PREFIX/bin" >> "$GITHUB_PATH"
+
+    # Verilator 5.050's generated build Makefile invokes `ccache g++`; on a cache
+    # HIT the build-from-source step (which installs ccache) is skipped, so
+    # install it unconditionally or the --binary build fails with Error 127.
+    - name: Ensure ccache present
+      run: sudo apt-get update && sudo apt-get install -y ccache
+
+    - name: Verilator version (must be UVM-capable 5.050)
+      run: verilator --version
+
+    - name: Lint UVM (elaborate-only, RAM-safe)
+      run: |
+        make -C uvm_dv/vlt lint \
+          VERILATOR="$VERILATOR_PREFIX/bin/verilator" \
+          UVM_HOME="$VERILATOR_PREFIX/uvm"
+
+    - name: Build and run UVM smoke test (smoke_test)
+      run: |
+        make -C uvm_dv/vlt smoke \
+          VERILATOR="$VERILATOR_PREFIX/bin/verilator" \
+          UVM_HOME="$VERILATOR_PREFIX/uvm" \
+          BUILD_JOBS="$(nproc)"

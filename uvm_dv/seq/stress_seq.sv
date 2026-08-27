@@ -82,7 +82,7 @@ class stress_seq #(
                 col = 10'h200;
 
             addr = mc_addr(bank, row, col);
-            send_read_burst(addr, logic'((n_reads + i)[ID_W-1:0]), arlen);
+            send_read_burst(addr, ID_W'(n_reads + i), arlen);
         end
     endtask
 
