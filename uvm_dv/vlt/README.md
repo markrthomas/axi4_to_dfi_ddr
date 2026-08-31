@@ -8,6 +8,10 @@ Runs the AXI4->DFI/DDR bridge UVM environment under open-source **Verilator
 - **Verilator >= 5.050, UVM-capable** (OSS CAD Suite's is not). Local ref:
   `~/verilator/bin/verilator`. **`unset VERILATOR_ROOT`** after sourcing the OSS
   CAD Suite env. **`UVM_HOME`** = `~/verilator/test_regress/t/uvm`.
+- **In an OSS-off shell** (`OSS_CAD=0` at start, or `oss-cad-off`) `~/.bashrc`
+  already puts Verilator 5.050 on `PATH`, unsets `VERILATOR_ROOT`, and exports
+  `UVM_HOME` — so the explicit `VERILATOR=`/`UVM_HOME=` and `unset` below are
+  optional there.
 
 ## Usage
 ```sh

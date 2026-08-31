@@ -11,3 +11,7 @@ installs **z3** for `randomize()` + `ccache`). Lint and the `--binary` build
 a documented design blocker. Diagnosis + next step in `swarm/PLAN.md`.
 
 Local lint (RAM-safe): `( unset VERILATOR_ROOT; make -C uvm_dv/vlt lint VERILATOR=~/verilator/bin/verilator UVM_HOME=~/verilator/test_regress/t/uvm )`
+
+In an OSS-off shell (`OSS_CAD=0` / `oss-cad-off`) Verilator 5.050 is on `PATH`,
+`VERILATOR_ROOT` is unset, and `UVM_HOME` is exported — the vars/`unset` above are
+then optional.
