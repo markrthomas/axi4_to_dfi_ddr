@@ -9,6 +9,7 @@ on:
 jobs:
   sim-and-lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 60  # <-- Change this to 60, 90, etc. (Default is 360)
     steps:
       - uses: actions/checkout@v4
 
@@ -23,6 +24,7 @@ jobs:
   coverage:
     needs: sim-and-lint
     runs-on: ubuntu-latest
+    timeout-minutes: 60  # <-- Change this to 60, 90, etc. (Default is 360)
     steps:
       - uses: actions/checkout@v4
 
@@ -44,6 +46,7 @@ jobs:
   cocotb:
     needs: sim-and-lint
     runs-on: ubuntu-latest
+    timeout-minutes: 60  # <-- Change this to 60, 90, etc. (Default is 360)
     steps:
       - uses: actions/checkout@v4
 
