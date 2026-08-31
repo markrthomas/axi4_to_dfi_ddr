@@ -262,7 +262,7 @@ Use the existing design as a prototype and tighten it in small, testable slices:
 
 Implement these first, in order:
 
-1. Extend FIFO formal beyond the current single-clock abstraction to true dual-clock data-integrity and ordering properties. The legacy Yosys harness now checks an in-order shadow FIFO; the SymbiYosys BMC checks a symbolic watched payload, but both retain host-safe and no-simultaneous-operation assumptions.
+1. **Done (bounded model):** `make formal-fifo-dual-clock` adds a separate depth-4 SymbiYosys model with independent clocks/reset release, a shadow queue, and bounded no-loss/no-duplication/in-order checks. The legacy single-clock harnesses remain intact. This is not CDC signoff: its legal-host, clock-progress, reset, depth, and bounded-traffic limitations are documented in `formal/README.md`.
 2. Replace the initial local-SLVERR pending logic with unified ordered response queues if future AXI features need more than one pending local error per channel.
 3. Add a second simulator target for FIFO and bridge smoke coverage.
 4. Continue modularization: dedicated AXI front-end and optional `dfi_adapter` (CDC + `mc_dfi_scheduler` are already separate files).

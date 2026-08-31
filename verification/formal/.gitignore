@@ -2,3 +2,4 @@
 async_fifo/
 async_fifo_bmc/
 async_fifo_cover/
+async_fifo_dual_clock/

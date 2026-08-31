@@ -1,0 +1,26 @@
+# True dual-clock bounded data-integrity proof for async_fifo_gray.
+#
+# Run from this directory: sby -f async_fifo_dual_clock.sby
+# The harness uses multiclock scheduling: wr_clk and rd_clk are independent
+# symbolic clocks constrained to progress without simultaneous transitions.
+
+[options]
+mode bmc
+depth 40
+multiclock on
+
+[engines]
+smtbmc boolector
+
+[script]
+read -formal -sv dual_clock_fifo_safety_top.sv cdc_fifo_lib.v
+hierarchy -top dual_clock_fifo_safety_top
+proc
+opt
+memory_map
+flatten
+opt
+
+[files]
+dual_clock_fifo_safety_top.sv
+../../src/cdc_fifo_lib.v
