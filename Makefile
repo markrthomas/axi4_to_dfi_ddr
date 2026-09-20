@@ -14,7 +14,7 @@ BRIDGE_SRCS := src/cdc_fifo_lib.v src/mc_dfi_scheduler.v src/axi4_bridge_fronten
 COV_DIR := obj_dir_cov
 
 .PHONY: help clean run test sim build vcd wave doc doc-html ci audit syn-check formal-fifo formal-fifo-dual-clock \
-        lint regress coverage formal cocotb
+        lint check regress coverage formal cocotb
 
 help:
 	@echo "axi4_to_dfi_ddr (repo root)"
@@ -31,6 +31,12 @@ help:
 	@echo "  make syn-check   - Yosys elaboration on syn/yosys.ys (skip if yosys missing)"
 	@echo "  make formal-fifo - Yosys BMC on formal/fifo_safety_top.sv (skip if yosys missing)"
 	@echo "  make formal-fifo-dual-clock - SymbiYosys dual-clock FIFO BMC (skip if sby missing)"
+	@echo "  make lint      - Verilator RTL lint (skip if verilator missing)"
+	@echo "  make check     - light local gate: lint + sim"
+	@echo "  make regress   - fuller local gate: check + smokes"
+	@echo "  make coverage  - Verilator line coverage (coverage.info)"
+	@echo "  make formal    - SymbiYosys formal (falls back to formal-fifo if sby missing)"
+	@echo "See DV_STANDARDS.md for the common make-target vocabulary shared across sibling repos."
 	@echo "See README.md for full instructions and per-directory make -C usage."
 
 clean:
@@ -57,6 +63,10 @@ formal-fifo-dual-clock:
 # lint: Verilator RTL lint (delegates to test/Makefile lint-verilator).
 lint:
 	$(MAKE) -C test lint-verilator
+
+# check: light local gate — lint + the functional/directed sim tier.
+# Fast enough to run on every save; see DV_STANDARDS.md.
+check: lint sim
 
 # regress: fast CI gate — lint + basic directed sim.
 regress: lint
