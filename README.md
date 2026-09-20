@@ -50,6 +50,7 @@ From the **repository root**, you can use the root `Makefile` or call `test/` di
 ```bash
 make help             # list root targets
 make run              # same as: make -C test run
+make check            # light local gate: lint + sim
 make ci               # main TB + smokes + elab-fail + Verilator + optional Yosys syn-check
 make audit            # make ci then design PDF (needs pandoc + pdflatex)
 make build            # compile only → test/build/sim.vvp
@@ -78,6 +79,8 @@ make -C test wave
 ```
 
 Continuous integration: **`.github/workflows/ci.yml`** runs **`make -C test ci`** on push and pull request to **`main`** (installs **iverilog** and **verilator** on Ubuntu).
+
+The root `Makefile` targets follow the common `make`-target vocabulary shared across this maintainer's RTL/DV repos; see **[`DV_STANDARDS.md`](DV_STANDARDS.md)**.
 
 The `test/Makefile` now recompiles before `run` / `vcd`, which avoids stale `sim.vvp` artifacts when your active `iverilog` / `vvp` toolchain changes between sessions.
 
