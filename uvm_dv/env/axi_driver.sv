@@ -34,6 +34,11 @@ class axi_driver #(
     task run_phase(uvm_phase phase);
         item_t req;
         drive_idle();
+        // Must not drive AW/AR/W while the DUT is in reset: awready/wready
+        // read as (deceptively) ready during reset, so an early transaction
+        // is silently swallowed by the write-request CDC FIFO, whose write
+        // pointer stays held at its reset value until axi_aresetn is high.
+        wait (vif.aresetn === 1'b1);
         @(posedge vif.aclk);
         forever begin
             seq_item_port.get_next_item(req);
@@ -97,6 +102,21 @@ class axi_driver #(
                 drive_aw_w_simul(req);
             end
         endcase
+        drive_b_response(req);
+    endtask
+
+    // Accept the B response: wait for bvalid, hold bready low for an extra
+    // bready_delay cycles (backpressure), then pulse bready for one cycle to
+    // complete the handshake. Asserting bready before bvalid is observed
+    // confuses the DUT's response-FIFO pop logic, so this mirrors the
+    // reference Icarus testbench's axi_wait_b (wait-then-pulse, never
+    // pre-asserted).
+    task drive_b_response(item_t req);
+        while (!vif.driver_cb.bvalid) @(posedge vif.aclk);
+        repeat (req.bready_delay) @(posedge vif.aclk);
+        vif.driver_cb.bready <= 1'b1;
+        @(posedge vif.aclk);
+        vif.driver_cb.bready <= 1'b0;
     endtask
 
     // AW phase only (fires handshake then de-asserts).
@@ -197,6 +217,24 @@ class axi_driver #(
         vif.driver_cb.arvalid <= 1'b0;
         #1;
         vif.driver_cb.arlen   <= 8'd0;
+
+        drive_r_response(req);
+    endtask
+
+    // Accept the R burst: for each beat, wait for rvalid, hold rready low
+    // for an extra rready_delay cycles (backpressure), then pulse rready for
+    // one cycle. Asserting rready before rvalid is observed confuses the
+    // DUT's response-FIFO pop logic, so this mirrors the reference Icarus
+    // testbench's axi_wait_r / axi_wait_r_burst (wait-then-pulse per beat,
+    // never pre-asserted, never held across beats).
+    task drive_r_response(item_t req);
+        for (int bi = 0; bi <= int'(req.len); bi++) begin
+            while (!vif.driver_cb.rvalid) @(posedge vif.aclk);
+            repeat (req.rready_delay) @(posedge vif.aclk);
+            vif.driver_cb.rready <= 1'b1;
+            @(posedge vif.aclk);
+            vif.driver_cb.rready <= 1'b0;
+        end
     endtask
 
 endclass
