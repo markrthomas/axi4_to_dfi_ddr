@@ -169,6 +169,23 @@ class axi_driver #(
         vif.driver_cb.wlast    <= (req.len == 8'd0);
         vif.driver_cb.wvalid   <= 1'b1;
         @(posedge vif.aclk);
+        // Confirm awvalid/wvalid actually reached the interface before
+        // trusting awready/wready: those read as 1 whenever the DUT isn't
+        // already holding a prior AW/W (i.e. most of the time), so a dropped
+        // assignment here looks identical to an instantly-granted handshake
+        // and silently loses the whole transaction. Seen against real
+        // UVM/Verilator timing: the clocking-block-driven assign above did
+        // not always take visible effect on a *repeat* call of this task,
+        // leaving awvalid/wvalid at 0 forever with the write never issued.
+        // Checked via the raw nets (vif.awvalid/wvalid), not driver_cb, since
+        // a clocking-block output reads back what this task last scheduled,
+        // not necessarily what reached the physical signal -- exactly the
+        // gap that let the dropped assignment go undetected before.
+        while (!(vif.awvalid && vif.wvalid)) begin
+            vif.driver_cb.awvalid <= 1'b1;
+            vif.driver_cb.wvalid  <= 1'b1;
+            @(posedge vif.aclk);
+        end
         // Wait until both AW and W[0] are accepted (may take different cycles).
         while (!(vif.driver_cb.awready && vif.driver_cb.wready))
             @(posedge vif.aclk);
