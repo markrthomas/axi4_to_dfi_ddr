@@ -1,7 +1,8 @@
 # UVM DV Makefile for the AXI4-to-DFI bridge — targets VCS + UVM 1.2.
 #
 # Usage:
-#   make build                     Compile (default test: smoke_test)
+#   make build                     Compile (default test: stress_test — the
+#                                   randomized LFSR write/read regression)
 #   make run TEST=smoke_test        Compile + run
 #   make run TEST=mc_cmd_test
 #   make run TEST=burst_rw_test
@@ -20,7 +21,9 @@ SIMV     := $(SIMV_DIR)/simv
 
 # Verbosity: UVM_NONE UVM_LOW UVM_MEDIUM UVM_HIGH UVM_FULL UVM_DEBUG
 VERB     ?= UVM_LOW
-TEST     ?= smoke_test
+# Default to the randomized stress test (LFSR-paced writes/reads, >= 5
+# transactions) when no TEST= is given; see DV_STANDARDS.md.
+TEST     ?= stress_test
 SEED     ?= 1
 
 # VCS compile flags

@@ -19,7 +19,8 @@
 #   formal-fifo  Yosys BMC on formal/fifo_safety_top.sv (skip if yosys not in PATH)
 #   ci      ... + syn-check + formal-fifo
 #   vcd     Run with +vcd; writes build/sim.vcd for gtkwave
-#   wave    Run vcd then launch gtkwave on build/sim.vcd (if gtkwave in PATH)
+#   wave    Run vcd then launch gtkwave on build/sim.vcd with the curated
+#           waves.gtkw signal layout (if gtkwave in PATH)
 #   clean   Remove build/
 #   help    Show this summary
 #   doc     Build doc/build/design_spec.pdf (pandoc + pdflatex)
@@ -30,6 +31,7 @@ DOC_DIR   := ../doc
 BUILD_DIR := build
 SIM       := $(BUILD_DIR)/sim.vvp
 VCD       := $(BUILD_DIR)/sim.vcd
+GTKW      := waves.gtkw
 BRIDGE_SRC := $(SRC_DIR)/cdc_fifo_lib.v $(SRC_DIR)/mc_dfi_scheduler.v $(SRC_DIR)/axi4_bridge_frontend.v $(SRC_DIR)/dfi_adapter.v $(SRC_DIR)/axi4_to_dfi_bridge.v
 SOURCES   := $(BRIDGE_SRC) $(SRC_DIR)/tb_axi4_to_dfi_bridge.v
 SMOKE_TOP := tb_param_smoke
@@ -216,9 +218,9 @@ vcd: build
 
 wave: vcd
 	@if command -v gtkwave >/dev/null 2>&1; then \
-		gtkwave $(VCD) & \
+		gtkwave $(VCD) $(GTKW) & \
 	else \
-		echo "gtkwave not found in PATH; open $(VCD) manually"; \
+		echo "gtkwave not found in PATH; open $(VCD) manually (curated layout: $(GTKW))"; \
 		exit 1; \
 	fi
 

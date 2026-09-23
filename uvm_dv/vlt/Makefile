@@ -18,7 +18,9 @@ UVM_HDR := $(UVM_HOME)/uvm_pkg_all_v2020_3_1_dpi.svh
 UVM_DPI := $(UVM_HOME)/v2020_3_1/dpi/uvm_dpi.cc
 
 BUILD_JOBS ?= 1
-UVM_TEST   ?= smoke_test
+# Default to the randomized stress test (LFSR-paced writes/reads, >= 5
+# transactions) when no UVM_TEST= is given; see DV_STANDARDS.md.
+UVM_TEST   ?= stress_test
 
 VFLAGS ?= --binary --timing --vpi -j $(BUILD_JOBS) --build-jobs $(BUILD_JOBS) \
           -Wno-fatal -Wno-COVERIGN -Wno-TIMESCALEMOD --CFLAGS -O0
@@ -58,6 +60,9 @@ build:
 	$(build)
 
 # The TB top calls run_test() with no default, so the test is chosen here.
+# `smoke` is this Makefile's single-test build+run entry point; it runs
+# UVM_TEST (default stress_test), not literally smoke_test — override with
+# UVM_TEST=smoke_test (or any test in uvm_dv/tests/) to run a different one.
 smoke: build
 	$(call run,$(UVM_TEST))
 
