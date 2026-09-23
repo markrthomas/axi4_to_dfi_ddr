@@ -27,6 +27,11 @@ class mc_cmd_test extends axi4_dfi_base_test;
         begin
             axi4_dfi_base_seq #(ADDR_W, DATA_W, ID_W) s8a;
             s8a = axi4_dfi_base_seq #(ADDR_W, DATA_W, ID_W)::type_id::create("s8a");
+            // axi4_dfi_base_seq has no body() override, so start() would
+            // run an empty sequence -- the sequencer must be attached
+            // directly (set_sequencer) before issuing items via the
+            // send_*/start_item helpers below.
+            s8a.set_sequencer(env.get_sequencer());
             // Prime write (not monitored)
             s8a.send_write_single(s8a.mc_addr(3'd5,14'd24,10'd0), 4'hE,
                                   64'hCAFEBABE_00000001);
@@ -34,7 +39,6 @@ class mc_cmd_test extends axi4_dfi_base_test;
             dfi_mon.reset_counts();
             // Monitored read (open-page hit)
             s8a.send_read_single(s8a.mc_addr(3'd5,14'd24,10'd4), 4'hF);
-            s8a.start(env.get_sequencer());
         end
         #(48 * 14);  // wait 48 dfi_clk cycles (~14 ns each)
         check_counts(dfi_mon, 0, 0, 1, 0, "8a open-page hit");
@@ -43,19 +47,19 @@ class mc_cmd_test extends axi4_dfi_base_test;
         begin
             axi4_dfi_base_seq #(ADDR_W, DATA_W, ID_W) s8b;
             s8b = axi4_dfi_base_seq #(ADDR_W, DATA_W, ID_W)::type_id::create("s8b");
+            s8b.set_sequencer(env.get_sequencer());
             // Prime bank 4 row 5
             s8b.send_write_single(s8b.mc_addr(3'd4,14'd5,10'd0), 4'h9,
                                   64'hDEAD6000_00006000);
-            s8b.start(env.get_sequencer());
         end
         dfi_mon.reset_counts();
         begin
             axi4_dfi_base_seq #(ADDR_W, DATA_W, ID_W) s8b2;
             s8b2 = axi4_dfi_base_seq #(ADDR_W, DATA_W, ID_W)::type_id::create("s8b2");
+            s8b2.set_sequencer(env.get_sequencer());
             // Row miss: different row in same bank
             s8b2.send_write_single(s8b2.mc_addr(3'd4,14'd6,10'd0), 4'h2,
                                    64'hDEAD6800_00006800);
-            s8b2.start(env.get_sequencer());
         end
         #(64 * 14);
         check_counts(dfi_mon, 1, 1, 0, 1, "8b row miss");
@@ -65,8 +69,8 @@ class mc_cmd_test extends axi4_dfi_base_test;
         begin
             axi4_dfi_base_seq #(ADDR_W, DATA_W, ID_W) s8c;
             s8c = axi4_dfi_base_seq #(ADDR_W, DATA_W, ID_W)::type_id::create("s8c");
+            s8c.set_sequencer(env.get_sequencer());
             s8c.send_write_single(32'h0700_0000, 4'hB, 64'hA5B7C0DE_07000000);
-            s8c.start(env.get_sequencer());
         end
         #(64 * 14);
         check_counts(dfi_mon, 0, 1, 0, 1, "8c cold bank");

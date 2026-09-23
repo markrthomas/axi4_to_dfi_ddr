@@ -402,11 +402,13 @@ module axi4_bridge_frontend #(
                 end
                 if (wreq_wr_en) begin
                     w_hold_valid <= 1'b0;
-                    if (w_pair_last)
-                        aw_hold_valid <= 1'b0;
-                    else
-                        aw_hold_addr <= aw_hold_addr + WADDR_INCR;
-                    w_axi_beat_idx <= w_beat_effective + 8'd1;
+                    if (w_pair_last) begin
+                        aw_hold_valid  <= 1'b0;
+                        w_axi_beat_idx <= 8'd0;
+                    end else begin
+                        aw_hold_addr   <= aw_hold_addr + WADDR_INCR;
+                        w_axi_beat_idx <= w_beat_effective + 8'd1;
+                    end
                 end else if (aw_fire)
                     w_axi_beat_idx <= 8'd0;
                 if (w_fire && !write_err_active && !wreq_wr_en) begin
