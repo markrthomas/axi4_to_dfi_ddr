@@ -15,10 +15,11 @@ V=~/verilator/bin/verilator ; U=~/verilator/test_regress/t/uvm
 ( unset VERILATOR_ROOT; make -C uvm_dv/vlt lint  VERILATOR=$V UVM_HOME=$U )  # RAM-safe
 ( unset VERILATOR_ROOT; make -C uvm_dv/vlt smoke VERILATOR=$V UVM_HOME=$U )  # build + run
 ```
-Top `tb_top`; test via `+UVM_TESTNAME` (default `smoke_test`, override with
-`UVM_TEST=<name>`; others: mc_cmd_test, burst_rw_test, fifo_depth_test,
-slverr_test, stress_test). The `--binary` build belongs in CI
-(`.github/workflows/verilator-uvm.yml`), not a RAM-constrained host.
+Top `tb_top`; test via `+UVM_TESTNAME` (default `stress_test`, the randomized
+LFSR write/read regression, override with `UVM_TEST=<name>`; others:
+smoke_test, mc_cmd_test, burst_rw_test, fifo_depth_test, slverr_test). The
+`--binary` build belongs in CI (`.github/workflows/verilator-uvm.yml`), not a
+RAM-constrained host.
 
 ## `uvm_macros.svh`
 Required tracked empty include-shim (the monolithic UVM header defines the

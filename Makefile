@@ -24,7 +24,7 @@ help:
 	@echo "  make audit     - make ci then build design PDF (pandoc + pdflatex)"
 	@echo "  make build     - compile simulation only (test/build/sim.vvp)"
 	@echo "  make vcd       - run simulation with +vcd (test/build/sim.vcd)"
-	@echo "  make wave      - vcd + gtkwave"
+	@echo "  make wave      - vcd + gtkwave (opens test/waves.gtkw curated signal layout)"
 	@echo "  make doc       - design PDF (doc/build/design_spec.pdf)"
 	@echo "  make doc-html  - design HTML (doc/build/design_spec.html)"
 	@echo "  make clean     - remove test/build/ and doc/build/"

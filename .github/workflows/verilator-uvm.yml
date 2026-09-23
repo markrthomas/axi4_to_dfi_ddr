@@ -68,7 +68,7 @@ jobs:
           VERILATOR="$VERILATOR_PREFIX/bin/verilator" \
           UVM_HOME="$VERILATOR_PREFIX/uvm"
 
-    - name: Build and run UVM smoke test (smoke_test)
+    - name: Build and run UVM default test (stress_test)
       run: |
         make -C uvm_dv/vlt smoke \
           VERILATOR="$VERILATOR_PREFIX/bin/verilator" \

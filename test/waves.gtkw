@@ -1,0 +1,86 @@
+[*]
+[*] axi4_to_dfi_ddr — curated GTKWave layout for test/build/sim.vcd
+[*] Groups the tb_axi4_to_dfi_bridge.v top-level AXI4 / DFI interface signals
+[*] by function. Generate the VCD with `make -C test vcd`, then either
+[*] `make -C test wave` (opens this layout automatically) or
+[*] `gtkwave test/build/sim.vcd test/waves.gtkw` by hand.
+[*]
+[dumpfile] "build/sim.vcd"
+[savefile] "waves.gtkw"
+[timestart] 0
+[size] 1600 1000
+[pos] -1 -1
+*-16.000000 1000 -1 0
+[sst_width] 260
+[signals_width] 300
+[sst_expanded] 1
+[sst_vpaned_height] 240
+@28
+-Clocks_and_Reset
+tb.axi_aclk
+tb.axi_aresetn
+tb.dfi_clk
+tb.dfi_rst_n
+-
+-AXI_Write_Address_AW
+tb.s_axi_awvalid
+tb.s_axi_awready
+tb.s_axi_awid
+tb.s_axi_awaddr
+tb.s_axi_awlen
+tb.s_axi_awsize
+tb.s_axi_awburst
+-
+-AXI_Write_Data_W
+tb.s_axi_wvalid
+tb.s_axi_wready
+tb.s_axi_wdata
+tb.s_axi_wstrb
+tb.s_axi_wlast
+-
+-AXI_Write_Response_B
+tb.s_axi_bvalid
+tb.s_axi_bready
+tb.s_axi_bid
+tb.s_axi_bresp
+-
+-AXI_Read_Address_AR
+tb.s_axi_arvalid
+tb.s_axi_arready
+tb.s_axi_arid
+tb.s_axi_araddr
+tb.s_axi_arlen
+tb.s_axi_arsize
+tb.s_axi_arburst
+-
+-AXI_Read_Data_R
+tb.s_axi_rvalid
+tb.s_axi_rready
+tb.s_axi_rid
+tb.s_axi_rdata
+tb.s_axi_rresp
+tb.s_axi_rlast
+-
+-DFI_Command_Address
+tb.dfi_init_start
+tb.dfi_init_complete
+tb.dfi_cs_n
+tb.dfi_ras_n
+tb.dfi_cas_n
+tb.dfi_we_n
+tb.dfi_act_n
+tb.dfi_bank
+tb.dfi_address
+-
+-DFI_Write_Data
+tb.dfi_wrdata_en
+tb.dfi_wrdata
+tb.dfi_wrdata_mask
+-
+-DFI_Read_Data
+tb.dfi_rddata_en
+tb.dfi_rddata_valid
+tb.dfi_rddata
+-
+-Testbench_Status
+tb.errors
