@@ -68,7 +68,11 @@ jobs:
           VERILATOR="$VERILATOR_PREFIX/bin/verilator" \
           UVM_HOME="$VERILATOR_PREFIX/uvm"
 
-    - name: Build and run UVM default test (stress_test)
+    - name: Build and run UVM default test (smoke_test)
+      # 15m, not the job's 120m ceiling: a hung/livelocked UVM run (see
+      # issue #9 -- stress_test livelocks under this Verilator flow) should
+      # fail fast here rather than burn the whole job timeout.
+      timeout-minutes: 15
       run: |
         make -C uvm_dv/vlt smoke \
           VERILATOR="$VERILATOR_PREFIX/bin/verilator" \
