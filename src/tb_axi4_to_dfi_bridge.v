@@ -35,6 +35,7 @@ module tb;
     integer tb_qi;
     integer tb_init_start_hi;
     integer tb_rng_state;
+    integer tb_rng_seed;
     integer tb_rs_op;
     integer tb_rs_gap;
     integer tb_rs_bank;
@@ -879,6 +880,11 @@ module tb;
     initial begin
         errors = 0;
         tb_rng_state = 32'hACE1_0426;
+        // +seed=<n> reseeds the Test 14 stress LFSR (`make wave` passes a random
+        // one). 0 is xorshift's fixed point, so it keeps the default seed.
+        if ($value$plusargs("seed=%d", tb_rng_seed) && tb_rng_seed != 0)
+            tb_rng_state = tb_rng_seed;
+        $display("[TB] stress LFSR seed = 0x%08h", tb_rng_state);
         mon_en = 1'b0;
         tb_read_addr_wr_ptr = 0;
         axi_aresetn = 1'b0;

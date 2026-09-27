@@ -18,9 +18,11 @@
 #   syn-check  Yosys hierarchy/opt on ../syn/yosys.ys (skip if yosys not in PATH)
 #   formal-fifo  Yosys BMC on formal/fifo_safety_top.sv (skip if yosys not in PATH)
 #   ci      ... + syn-check + formal-fifo
-#   vcd     Run with +vcd; writes build/sim.vcd for gtkwave
-#   wave    Run vcd then launch gtkwave on build/sim.vcd with the curated
-#           waves.gtkw signal layout (if gtkwave in PATH)
+#   vcd     Run with +vcd; writes build/sim.vcd for gtkwave (SEED=<n> reseeds
+#           the Test 14 LFSR stress via +seed=<n>)
+#   wave    Run vcd with a fresh random SEED (or SEED=<n> to reproduce), then
+#           launch gtkwave on build/sim.vcd with the curated waves.gtkw layout,
+#           zoomed to fit (zoom_full.tcl); skips the viewer if gtkwave is absent
 #   clean   Remove build/
 #   help    Show this summary
 #   doc     Build doc/build/design_spec.pdf (pandoc + pdflatex)
@@ -83,7 +85,7 @@ help:
 	@echo "  formal-fifo - Yosys BMC on async_fifo_gray wrapper (skip if no yosys)"
 	@echo "  ci     - run + smokes (incl. tras) + elab-fail-all + lint + syn-check + formal-fifo"
 	@echo "  vcd    - run tests and write $(VCD) (open with gtkwave)"
-	@echo "  wave   - vcd + gtkwave $(VCD)"
+	@echo "  wave   - random-seed run (SEED=<n> to replay) + gtkwave $(VCD) w/ $(GTKW)"
 	@echo "  doc    - PDF from $(DOC_DIR)/DESIGN_SPEC.md (requires pandoc + pdflatex)"
 	@echo "  doc-html - HTML from design spec (pandoc only)"
 	@echo "  clean  - remove $(BUILD_DIR)/ only (use repo root 'make clean' for doc too)"
@@ -213,15 +215,24 @@ formal-fifo:
 ci: run run-smoke run-smoke-zc run-smoke-refresh run-smoke-tras run-fifo run-fifo-verilator elab-fail-all lint-verilator syn-check formal-fifo
 
 vcd: build
-	$(VVP) $(SIM) +vcd
+	$(VVP) $(SIM) +vcd $(if $(SEED),+seed=$(SEED))
 	@echo "VCD: $(VCD)  (gtkwave $(VCD))"
 
-wave: vcd
+# `make wave` is a random run: a new seed every time unless SEED=<n> is given.
+# The seed is printed so a failing run can be replayed with SEED=<n>.
+WAVE_SEED := $(or $(SEED),$(shell echo $$(( $$(od -An -N4 -tu4 /dev/urandom) % 2147483646 + 1 ))))
+WAVE_LOG  := $(BUILD_DIR)/wave.log
+
+wave: build
+	@echo "[WAVE] random stress seed: SEED=$(WAVE_SEED)"
+	$(VVP) $(SIM) +vcd +seed=$(WAVE_SEED) | tee $(WAVE_LOG)
+	@if grep -q '^PASS' $(WAVE_LOG); then echo "[WAVE] PASS (SEED=$(WAVE_SEED))"; \
+	else echo "[WAVE] *** TEST FAILED (SEED=$(WAVE_SEED)) — opening waves for debug ***"; fi
 	@if command -v gtkwave >/dev/null 2>&1; then \
-		gtkwave $(VCD) $(GTKW) & \
+		echo "[WAVE] opening $(VCD) with $(GTKW)"; \
+		gtkwave -S zoom_full.tcl $(VCD) $(GTKW) & \
 	else \
-		echo "gtkwave not found in PATH; open $(VCD) manually (curated layout: $(GTKW))"; \
-		exit 1; \
+		echo "[WAVE] gtkwave not on PATH — VCD is at $(VCD) (curated layout: $(GTKW))"; \
 	fi
 
 doc:
