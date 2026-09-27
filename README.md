@@ -55,7 +55,8 @@ make ci               # main TB + smokes + elab-fail + Verilator + optional Yosy
 make audit            # make ci then design PDF (needs pandoc + pdflatex)
 make build            # compile only → test/build/sim.vvp
 make vcd              # run with +vcd → test/build/sim.vcd
-make wave             # vcd, then launch gtkwave (if in PATH)
+make wave             # random-seed run (+seed → Test 14 LFSR stress) → VCD, then gtkwave
+                      #   with test/waves.gtkw zoomed to fit; SEED=<n> replays a run
 ```
 
 Equivalent using `make -C test`:
