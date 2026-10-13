@@ -35,6 +35,7 @@ help:
 	@echo "  make check     - light local gate: lint + sim"
 	@echo "  make regress   - fuller local gate: check + smokes"
 	@echo "  make coverage  - Verilator line coverage (coverage.info)"
+	@echo "  make stress    - stress / randomized simulation (n/a stub if none)"
 	@echo "  make formal    - SymbiYosys formal (falls back to formal-fifo if sby missing)"
 	@echo "See DV_STANDARDS.md for the common make-target vocabulary shared across sibling repos."
 	@echo "See README.md for full instructions and per-directory make -C usage."
@@ -120,3 +121,8 @@ doc:
 
 doc-html:
 	$(MAKE) -C doc html
+
+# Standard DV target (DV_STANDARDS.md)
+.PHONY: stress
+stress:
+	@echo "[STRESS] n/a: no stress/randomized tier in this repo yet (see DV_STANDARDS.md)"
