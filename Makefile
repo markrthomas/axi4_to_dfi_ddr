@@ -39,6 +39,9 @@ help:
 	@echo "  make formal    - SymbiYosys formal (falls back to formal-fifo if sby missing)"
 	@echo "See DV_STANDARDS.md for the common make-target vocabulary shared across sibling repos."
 	@echo "See README.md for full instructions and per-directory make -C usage."
+	@echo "  swarm      Swarm A (verification) via Claude Code; swarm-rr = Swarm B (random regression); swarm-dry = show the command"
+	@echo "  batch      the Railway batch (docker/entrypoint.sh ci); board = swarm status; heavy T=<t> = one heavy target at a time"
+	@echo "  swarm-profile / swarm-kit-check   print .claude/swarm.env / check kit drift (shared kit: markrthomas/dv-swarm-kit)"
 
 clean:
 	$(MAKE) -C test clean
@@ -126,3 +129,6 @@ doc-html:
 .PHONY: stress
 stress:
 	@echo "[STRESS] n/a: no stress/randomized tier in this repo yet (see DV_STANDARDS.md)"
+
+# shared swarm/infra targets (markrthomas/dv-swarm-kit)
+include swarm.mk

@@ -19,3 +19,5 @@ coverage.info
 
 # Local Codex workspace artifacts
 .codex
+/verification/random/runs/
+/docker/last-run-metrics.json

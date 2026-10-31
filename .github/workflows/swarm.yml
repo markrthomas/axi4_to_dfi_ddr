@@ -1,0 +1,31 @@
+# Manual-only: run the Claude Code agent swarm on this repo.  [swarm-kit: shared file, do not fork per repo]
+# The job itself lives in markrthomas/dv-swarm-kit (swarm-run.yml) so every DV repo runs the same thing.
+# Needs a repository secret CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) or ANTHROPIC_API_KEY.
+# The swarm may push a `swarm/<date>-<topic>` branch; a human reviews and merges.
+name: swarm
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "which swarm"
+        type: choice
+        options:
+          - docker/swarm-task.md
+          - docker/rr-swarm-task.md
+        default: docker/swarm-task.md
+      model:
+        description: "model for the manager agent (empty = CLI default)"
+        default: ""
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  swarm:
+    uses: markrthomas/dv-swarm-kit/.github/workflows/swarm-run.yml@v0
+    with:
+      task: ${{ inputs.task }}
+      model: ${{ inputs.model }}
+    secrets: inherit

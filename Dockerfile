@@ -12,7 +12,7 @@
 # Run  :  docker run --rm <repo>            # make check (default)
 #         docker run --rm <repo> make lint  # a single target
 # -----------------------------------------------------------------------------
-FROM ubuntu:24.04
+FROM ubuntu:24.04 AS tools
 
 ARG COCOTB_VERSION=1.9.2
 ARG PYUVM_VERSION=4.0.1
@@ -49,6 +49,19 @@ RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir \
         "cocotb==${COCOTB_VERSION}" "pyuvm==${PYUVM_VERSION}" cocotb_coverage pytest
 
+# Claude Code CLI for swarm runs (dv-swarm-kit: devcontainer, swarm workflow, Railway swarm service).
+ARG WITH_CLAUDE=0
+RUN if [ "$WITH_CLAUDE" = "1" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends nodejs npm \
+      && npm install -g @anthropic-ai/claude-code && rm -rf /var/lib/apt/lists/*; \
+    fi
+
+# -----------------------------------------------------------------------------
+# full: the toolchain + this repo. Railway / the swarm workflow build this stage; the devcontainer and CI can
+# use `--target tools` (toolchain only, repo mounted). dv-swarm-kit docs/dockerfile.md.
+# -----------------------------------------------------------------------------
+FROM tools AS full
+
 WORKDIR /work
 COPY . /work
 
@@ -59,4 +72,7 @@ RUN iverilog -V | head -1 \
 
 # Default: the standard light local gate (see DV_STANDARDS.md). Override the
 # command to run a different target, e.g. `docker run --rm <repo> make ci`.
+RUN chmod +x docker/*.sh
+# dv-swarm-kit entrypoint: no args = the Railway batch; any other command (e.g. the CMD below) is exec'd
+ENTRYPOINT ["/work/docker/entrypoint.sh"]
 CMD ["make", "check"]
