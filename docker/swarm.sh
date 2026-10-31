@@ -2,7 +2,7 @@
 # docker/swarm.sh — run the Claude Code agent swarm on this repo.  [swarm-kit: shared file, do not fork per repo;
 #   repo specifics come from .claude/swarm.env - see markrthomas/dv-swarm-kit]
 #
-#   docker/swarm.sh [--dry-run] [--task FILE] [--model MODEL] [--agent NAME]
+#   docker/swarm.sh [--dry-run] [--task FILE | --prompt TEXT] [--model MODEL] [--agent NAME|none]
 #
 # Runs Claude Code non-interactively (-p) and NON-bare, so the project's
 # .claude/agents/ definitions are discoverable; the task (default
@@ -28,6 +28,7 @@ cd "$(dirname "$0")/.."
 PROJECT="${PROJECT:-$(basename "$PWD")}"
 
 task=docker/swarm-task.md
+prompt=""
 model="${SWARM_MODEL:-}"
 agent=""
 dry=0
@@ -35,40 +36,59 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) dry=1 ;;
     --task) task="$2"; shift ;;
+    --prompt) prompt="$2"; shift ;;          # one-off task text instead of a task file (entrypoint `agent` mode)
     --model) model="$2"; shift ;;
-    --agent) agent="$2"; shift ;;
+    --agent) agent="$2"; shift ;;           # `none` = plain session, no manager agent
     *) echo "swarm.sh: unknown arg $1" >&2; exit 2 ;;
   esac
   shift
 done
-[ -f "$task" ] || { echo "swarm.sh: task file $task not found" >&2; exit 2; }
-
-if [ -z "$agent" ]; then
-  case "$task" in *rr-swarm-task*) agent=rr-manager ;; *) agent=swarm-manager ;; esac
+if [ -z "$prompt" ]; then
+  [ -f "$task" ] || { echo "swarm.sh: task file $task not found" >&2; exit 2; }
+  prompt="$(cat "$task")"; src="$task"
+  if [ -z "$agent" ]; then
+    case "$task" in *rr-swarm-task*) agent=rr-manager ;; *) agent=swarm-manager ;; esac
+  fi
+else
+  src="--prompt"; agent="${agent:-none}"
 fi
-[ -f ".claude/agents/$agent.md" ] || { echo "swarm.sh: agent $agent not found in .claude/agents" >&2; exit 2; }
+if [ "$agent" != none ]; then
+  [ -f ".claude/agents/$agent.md" ] || { echo "swarm.sh: agent $agent not found in .claude/agents" >&2; exit 2; }
+fi
 
-cmd=(claude -p "$(cat "$task")" --agent "$agent" --output-format json --permission-mode acceptEdits
+cmd=(claude -p "$prompt" --output-format json --permission-mode "${SWARM_PERMISSION_MODE:-acceptEdits}"
      --allowedTools "Read Edit Write Glob Grep Agent")
+[ "$agent" != none ] && cmd+=(--agent "$agent")
 [ -n "$model" ] && cmd+=(--model "$model")
 
 if [ "$dry" = 1 ]; then
-  echo "swarm.sh (dry run): would run in $(pwd) [$PROJECT, envs: ${DV_ENVS:-none}, rr: ${RR_STATUS:-unset}]:"
-  printf '  %q' "${cmd[@]:0:1}"; echo " -p <$(wc -c < "$task") bytes from $task> ${cmd[*]:3}"
+  echo "swarm.sh (dry run): would run in $(pwd) [$PROJECT, envs: ${DV_ENVS:-none}, rr: ${RR_STATUS:-unset}, provider: ${SWARM_MODEL_PROVIDER:-anthropic}]:"
+  echo "  claude -p <${#prompt} chars from $src> ${cmd[*]:3}"
   echo "  agents: $(ls .claude/agents/*.md | xargs -n1 basename | tr '\n' ' ')"
   exit 0
 fi
 
-command -v claude >/dev/null || { echo "swarm.sh: claude CLI not found" >&2; exit 2; }
-if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ] && [ -z "${ANTHROPIC_AUTH_TOKEN:-}" ]; then
-  echo "swarm.sh: set CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY, or ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN)" >&2
-  exit 2
-fi
+command -v claude >/dev/null || { echo "swarm.sh: claude CLI not found (build the image with WITH_CLAUDE=1)" >&2; exit 2; }
+. docker/provider-env.sh
+swarm_resolve_provider || exit 2
 
-if [ -n "${GITHUB_TOKEN:-}" ]; then   # lets the swarm push a branch / open a draft PR
+if [ -n "${GITHUB_TOKEN:-}" ]; then   # lets the swarm push a branch / open a draft PR (gh reads GITHUB_TOKEN itself)
   git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
   git config --global user.name  "${GIT_AUTHOR_NAME:-${PROJECT}-swarm}"
   git config --global user.email "${GIT_AUTHOR_EMAIL:-${PROJECT}-swarm@users.noreply.github.com}"
+fi
+
+# An image built from the repo has no .git (e.g. a Railway swarm service), so nothing could be committed or pushed.
+# Clone the repo at run time and work there instead.  Ported from axi-on-ucie-to-mem / ucie2-pipe7-bridge.
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  [ -n "${GITHUB_TOKEN:-}" ] && [ -n "${GH_REPO:-}" ] || {
+    echo "swarm.sh: not a git checkout and GITHUB_TOKEN/GH_REPO unset - the swarm could not commit or push" >&2; exit 2; }
+  work="${SWARM_WORKDIR:-$HOME/swarm-work}/${PROJECT}"
+  rm -rf "$work"; mkdir -p "$(dirname "$work")"
+  git clone -q --depth 50 "https://github.com/${GH_REPO}.git" "$work"
+  echo "swarm.sh: image has no .git - cloned ${GH_REPO} into $work"
+  cp -f docker/last-run-metrics.json "$work/docker/" 2>/dev/null || true
+  cd "$work"
 fi
 
 out=$(mktemp)

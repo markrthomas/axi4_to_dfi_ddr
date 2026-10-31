@@ -52,7 +52,7 @@ RUN pip install --no-cache-dir --upgrade pip \
 # Claude Code CLI for swarm runs (dv-swarm-kit: devcontainer, swarm workflow, Railway swarm service).
 ARG WITH_CLAUDE=0
 RUN if [ "$WITH_CLAUDE" = "1" ]; then \
-      apt-get update && apt-get install -y --no-install-recommends nodejs npm \
+      apt-get update && apt-get install -y --no-install-recommends nodejs npm gh \
       && npm install -g @anthropic-ai/claude-code && rm -rf /var/lib/apt/lists/*; \
     fi
 

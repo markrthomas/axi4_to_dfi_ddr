@@ -13,10 +13,16 @@ on:
         options:
           - docker/swarm-task.md
           - docker/rr-swarm-task.md
+          - docker/plan-swarm-task.md
         default: docker/swarm-task.md
       model:
         description: "model for the manager agent (empty = CLI default)"
         default: ""
+      provider:
+        description: "model provider (kimi sends repo contents to Moonshot - see docker/provider-env.sh)"
+        type: choice
+        options: [anthropic, kimi]
+        default: anthropic
 
 permissions:
   contents: write
@@ -28,4 +34,5 @@ jobs:
     with:
       task: ${{ inputs.task }}
       model: ${{ inputs.model }}
+      provider: ${{ inputs.provider }}
     secrets: inherit

@@ -15,7 +15,7 @@ Read `.claude/swarm.env` and CLAUDE.md first. Scope: the `INFRA_TARGETS` flows, 
 - Swarm-kit files (`.claude/agents/*`, `.claude/skills/*`, `.claude/settings.json`, `docker/swarm.sh`,
   `docker/entrypoint.sh`, `docker/publish_metrics.sh`, `swarm.mk`, `tools/swarm/board.py`, `.github/workflows/swarm.yml`,
   `.devcontainer/devcontainer.json`, `railway.toml`) are shared across repos: report needed changes, do not fork them
-  per repo. Repo behaviour belongs in `.claude/swarm.env` / CLAUDE.md.
+  per repo. Repo behaviour belongs in `.claude/swarm.env` / CLAUDE.md; a file listed in `KIT_KEEP` is repo-owned.
 - metrics (if `METRICS=yes`): every value must carry kind measured / estimated / not_attributable; never invent a
   measured number. Metrics are never part of the gate.
 - Changes go on a feature branch; `make $GATE_TARGET` must pass before a push.

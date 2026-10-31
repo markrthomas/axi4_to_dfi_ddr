@@ -1,0 +1,51 @@
+# Plan-driven swarm.  [swarm-kit: shared file, do not fork per repo]  Ported from axi-on-ucie-to-mem.
+# Write docs/SWARM_PLAN.md with front-matter `status: ready` and push it to main: this runs the swarm on
+# docker/plan-swarm-task.md, which implements the plan on a swarm/ branch and opens a draft PR (a human merges).
+# Reset the plan to `status: draft` after it lands.  Manual dispatch runs it regardless of the status line.
+name: plan-swarm
+
+on:
+  push:
+    branches: [main]
+    paths: ["docs/SWARM_PLAN.md"]
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: "model provider (kimi sends repo contents to Moonshot - see docker/provider-env.sh)"
+        type: choice
+        options: [anthropic, kimi]
+        default: anthropic
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: dv-swarm
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then echo "run=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          if [ -f docs/SWARM_PLAN.md ] && head -n 20 docs/SWARM_PLAN.md | grep -qiE '^status:[[:space:]]*ready'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "docs/SWARM_PLAN.md is not 'status: ready' - skipping" >> "$GITHUB_STEP_SUMMARY"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+  swarm:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    uses: markrthomas/dv-swarm-kit/.github/workflows/swarm-run.yml@v0
+    with:
+      task: docker/plan-swarm-task.md
+      provider: ${{ inputs.provider || 'anthropic' }}
+      timeout-minutes: 180
+    secrets: inherit
