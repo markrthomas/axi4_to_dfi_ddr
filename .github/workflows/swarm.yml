@@ -35,4 +35,10 @@ jobs:
       task: ${{ inputs.task }}
       model: ${{ inputs.model }}
       provider: ${{ inputs.provider }}
-    secrets: inherit
+    secrets:
+      # passed explicitly: `secrets: inherit` only works within one organization/enterprise, not across a
+      # personal account's repos calling dv-swarm-kit
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+      SWARM_GITHUB_TOKEN: ${{ secrets.SWARM_GITHUB_TOKEN }}
