@@ -78,16 +78,26 @@ if [ -n "${GITHUB_TOKEN:-}" ]; then   # lets the swarm push a branch / open a dr
   git config --global user.email "${GIT_AUTHOR_EMAIL:-${PROJECT}-swarm@users.noreply.github.com}"
 fi
 
+home="$PWD"   # where the caller expects docker/last-run-metrics.json (the swarm workflow uploads it from here)
+
+# A checkout mounted into a container is owned by another uid (the CI runner), and git then refuses it as "dubious
+# ownership" - which would look exactly like "no .git" below.  Trust this one directory and carry on.
+probe="$(git rev-parse --is-inside-work-tree 2>&1 >/dev/null || true)"   # not a pipe: pipefail would mask the match
+case "$probe" in *"dubious ownership"*)
+  git config --global --add safe.directory "$PWD"
+  echo "swarm.sh: trusting $PWD (checkout owned by another uid)" ;;
+esac
+
 # An image built from the repo has no .git (e.g. a Railway swarm service), so nothing could be committed or pushed.
-# Clone the repo at run time and work there instead.  Ported from axi-on-ucie-to-mem / ucie2-pipe7-bridge.
+# Clone the repo at run time - on the branch being run, not the default branch - and work there instead.
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   [ -n "${GITHUB_TOKEN:-}" ] && [ -n "${GH_REPO:-}" ] || {
     echo "swarm.sh: not a git checkout and GITHUB_TOKEN/GH_REPO unset - the swarm could not commit or push" >&2; exit 2; }
   work="${SWARM_WORKDIR:-$HOME/swarm-work}/${PROJECT}"
   rm -rf "$work"; mkdir -p "$(dirname "$work")"
-  git clone -q --depth 50 "https://github.com/${GH_REPO}.git" "$work"
-  echo "swarm.sh: image has no .git - cloned ${GH_REPO} into $work"
-  cp -f docker/last-run-metrics.json "$work/docker/" 2>/dev/null || true
+  ref="${SWARM_REF:-${GITHUB_HEAD_REF:-${GITHUB_REF_NAME:-}}}"
+  git clone -q --depth 50 ${ref:+--branch "$ref"} "https://github.com/${GH_REPO}.git" "$work"
+  echo "swarm.sh: image has no .git - cloned ${GH_REPO}${ref:+@$ref} into $work"
   cd "$work"
 fi
 
@@ -108,5 +118,9 @@ for model, u in (d.get("modelUsage") or {}).items():
 json.dump({"rc": rc, "agents": rows, "total_cost_usd": d.get("total_cost_usd"),
            "result": (d.get("result") or "")[-4000:]}, sys.stdout, indent=2)
 PY
-echo "swarm.sh: claude exited $rc; usage -> docker/last-run-metrics.json"
+[ "$PWD" != "$home" ] && mkdir -p "$home/docker" && cp -f docker/last-run-metrics.json "$home/docker/"
+echo "swarm.sh: claude exited $rc; usage -> $home/docker/last-run-metrics.json"
+# the manager's final report, in the job log too (the artifact holds the same text plus token usage)
+echo "===== swarm report (last 4000 chars) ====="
+python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("result") or "(no result - see the claude output above)")' docker/last-run-metrics.json || true
 exit "$rc"
