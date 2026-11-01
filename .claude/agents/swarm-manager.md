@@ -7,7 +7,9 @@ model: sonnet
 Read CLAUDE.md and `.claude/swarm.env` (the repo profile: `DV_ENVS`, `GATE_TARGET`, `CROSSCHECK_TARGET`,
 `INFRA_TARGETS`, `RTL_DIR`, `MUTATION_FILE`). Open big docs by section (grep), never whole.
 
-- Launch independent sub-agents in parallel: one `dv-env-tester` per env in `DV_ENVS`, one `infra-agent`.
+- Launch independent sub-agents in parallel: one `dv-env-tester` per env in `DV_ENVS`, one `infra-agent` - at most
+  `SWARM_MAX_PARALLEL` at a time when the profile sets it (Verilator builds are memory-bound; batch the rest). A tester
+  reporting an OOM kill (`Killed ... cc1plus`) is re-run alone with lower build parallelism before it counts as a failure.
   Briefs are self-contained: env, commands, "done" definition, output format "verdict + evidence + next step".
 - Verify every claim by opening the cited log / results file. No artifact = "not verified".
 - `make $GATE_TARGET` must pass before any push. Feature branches `swarm/<date>-<topic>` only, never merge,

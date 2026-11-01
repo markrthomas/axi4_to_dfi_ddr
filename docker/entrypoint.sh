@@ -12,12 +12,15 @@
 #   <cmd...>         : run an arbitrary command inside the image
 # Knobs (Railway variables / env; profile defaults in .claude/swarm.env):
 #   MAKE_OVERRIDES   extra make args for bundled tools, e.g. "VERILATOR=/opt/verilator/bin/verilator UVM_HOME=..."
-#   MIN_MEM_MB       memory floor checked before the batch (fail fast instead of an OOM-killed cc1plus);
+#   MIN_MEM_MB       memory floor checked before CI_TARGET / HEAVY_TARGETS (fail fast, exit 3, instead of an
+#                    OOM-killed cc1plus);
 #                    SKIP_MEM_CHECK=1 bypasses it
 #   LOG_QUIET        1 = stream only signal lines ([BANNER]s, errors, warnings, PASS/FAIL) and keep the full
 #                    transcript in logs/batch.log (default: on when running on Railway, which rate-limits logs)
 #   KEEP_ALIVE=1     after the batch, hold the container open (railway ssh in to inspect)
 #   DEBUG_SHELL=1    skip the batch and hold the container open
+#   POST_BATCH       shell command run after the batch (e.g. "make metrics dashboard"); additive - it cannot change
+#                    the batch's exit code
 #   PUBLISH_METRICS  unset = publish when a token is set (Railway); 1 = publish; empty or 0 = don't
 # Ported from eth-dj-to-pcie-pipe-bridge, axi-on-ucie-to-mem and ucie2-pipe7-bridge.
 set -euo pipefail
@@ -46,9 +49,11 @@ if [ -z "${JOBS:-}" ]; then
   echo "entrypoint: JOBS=$JOBS (cores=$cores, memory limit=$lim; set JOBS to override)"
 fi
 
-preflight() {   # fail fast before a RAM-heavy build that would only be OOM-killed minutes in
+preflight() {   # preflight <targets...>: fail fast before a RAM-heavy build that would only be OOM-killed minutes in
   [ -n "${MIN_MEM_MB:-}" ] && [ "${SKIP_MEM_CHECK:-0}" != 1 ] || return 0
-  local lim mb
+  local t heavy=0 lim mb      # only the batch target and HEAVY_TARGETS are guarded; `make lint` on a small box is fine
+  for t in "$@"; do [[ " $CI_TARGET ${HEAVY_TARGETS:-} " == *" $t "* ]] && heavy=1; done
+  [ "$heavy" = 1 ] || return 0
   lim="$(mem_limit)"
   if [ "$lim" = max ] || ! [ "$lim" -lt 1099511627776 ] 2>/dev/null; then
     mb="$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)"
@@ -92,7 +97,7 @@ case "$mode" in
   ci)
     [ "${DEBUG_SHELL:-0}" = 1 ] && hold_open "DEBUG_SHELL=1, batch skipped"
     rc=0
-    preflight || exit 3
+    preflight "$CI_TARGET" || exit 3
     if [ "${METRICS:-no}" = "yes" ]; then
       # METRICS_FLOWS default comes from swarm.env; a Railway variable overrides it
       make metrics METRICS_FLOWS="${METRICS_FLOWS:-$CI_TARGET}" METRICS_NOTE="${METRICS_NOTE:-container run}" "${overrides[@]}" || rc=$?
@@ -106,6 +111,10 @@ case "$mode" in
       echo "entrypoint: make $CI_TARGET ${MAKE_OVERRIDES:-} (full log: logs/batch.log)"
       run_make "$CI_TARGET" || rc=$?
     fi
+    if [ -n "${POST_BATCH:-}" ]; then
+      echo "entrypoint: POST_BATCH: ${POST_BATCH} (additive: cannot change rc=$rc)"
+      bash -c "$POST_BATCH" || echo "entrypoint: POST_BATCH failed (ignored)"
+    fi
     # the container is ephemeral: publish the results to the repo's metrics-data branch;
     # a publishing problem is reported but does not change the run's exit code
     case "${PUBLISH_METRICS-auto}" in
@@ -118,7 +127,7 @@ case "$mode" in
     ;;
   make)
     shift
-    preflight || exit 3
+    preflight "$@" || exit 3
     rc=0; run_make "$@" || rc=$?
     [ "${KEEP_ALIVE:-0}" = 1 ] && hold_open "KEEP_ALIVE=1, make rc=$rc"
     exit "$rc"
