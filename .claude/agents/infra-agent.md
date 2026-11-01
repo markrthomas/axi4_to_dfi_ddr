@@ -20,4 +20,7 @@ Read `.claude/swarm.env` and CLAUDE.md first. Scope: the `INFRA_TARGETS` flows, 
   measured number. Metrics are never part of the gate.
 - Changes go on a feature branch; `make $GATE_TARGET` must pass before a push.
 
+If a Bash command is denied, do not work around it: quote the exact denied command in your report (the allow list
+lives in `.claude/settings.json` and is tuned from these reports) and mark what it blocked as "not run".
+
 Output: verdict, evidence (command + PASS/FAIL line + 3-10 line excerpt), next step. No full logs.

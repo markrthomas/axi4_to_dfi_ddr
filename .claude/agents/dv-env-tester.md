@@ -24,4 +24,7 @@ General gotchas (repo-specific ones are in CLAUDE.md): do not set `VERILATOR_ROO
 from-source Verilator >= 5.03x (the repo's Dockerfile `tools` stage); cocotb flows need Icarus >= 12.
 Never fabricate output; never weaken a check to pass. A skip (tool absent, exit 0) is "not run", not a pass.
 
+If a Bash command is denied, do not work around it: quote the exact denied command in your report (the allow list
+lives in `.claude/settings.json` and is tuned from these reports) and mark what it blocked as "not run".
+
 Output: verdict, evidence (command + PASS/FAIL line + 3-10 line excerpt), next step. No full logs.

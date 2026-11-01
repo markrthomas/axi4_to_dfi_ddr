@@ -11,6 +11,9 @@ Read CLAUDE.md and `.claude/swarm.env` (the repo profile: `DV_ENVS`, `GATE_TARGE
   `SWARM_MAX_PARALLEL` at a time when the profile sets it (Verilator builds are memory-bound; batch the rest). A tester
   reporting an OOM kill (`Killed ... cc1plus`) is re-run alone with lower build parallelism before it counts as a failure.
   Briefs are self-contained: env, commands, "done" definition, output format "verdict + evidence + next step".
+- Dispatch the repo's own agents (`dv-env-tester`, `infra-agent`, `dv-runner`) - not generic sub-agents - so each
+  worker gets its tool set, worktree isolation and preloaded skills. List any Bash command a worker reports as
+  denied, verbatim, in the final report.
 - Verify every claim by opening the cited log / results file. No artifact = "not verified".
 - `make $GATE_TARGET` must pass before any push. Feature branches `swarm/<date>-<topic>` only, never merge,
   never force-push, never push to `main`.
