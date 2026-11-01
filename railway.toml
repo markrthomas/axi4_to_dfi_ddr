@@ -1,0 +1,18 @@
+# Railway config-as-code: a BATCH job, not a web service.  [swarm-kit: shared file, do not fork per repo]
+# startCommand runs the repo's batch (docker/entrypoint.sh ci: make metrics/$CI_TARGET), publishes the results to
+# the `metrics-data` branch, and exits; no healthcheck, never restarted.  It is explicit because some repos keep
+# CMD ["make","check"] in the Dockerfile for plain `docker run` users.  A swarm service overrides it in Railway:
+# `docker/entrypoint.sh swarm [--task docker/rr-swarm-task.md]`.
+# Service variables (set in Railway, never in the repo): CLAUDE_CODE_OAUTH_TOKEN (swarm services only),
+# GITHUB_TOKEN (fine-grained, this repo only, Contents read+write), optional METRICS_FLOWS / JOBS.
+# The service's own dashboard settings win over this file for restart policy and cron: set
+# Restart Policy = Never and the Cron Schedule there too (see docs/railway.md in the kit).
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "docker/entrypoint.sh ci"
+restartPolicyType = "NEVER"
+# weekly full run, Sundays 03:17 UTC; remove to run only on deploy
+cronSchedule = "17 3 * * 0"

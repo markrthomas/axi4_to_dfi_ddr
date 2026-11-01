@@ -1,0 +1,44 @@
+# Manual-only: run the Claude Code agent swarm on this repo.  [swarm-kit: shared file, do not fork per repo]
+# The job itself lives in markrthomas/dv-swarm-kit (swarm-run.yml) so every DV repo runs the same thing.
+# Needs a repository secret CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) or ANTHROPIC_API_KEY.
+# The swarm may push a `swarm/<date>-<topic>` branch; a human reviews and merges.
+name: swarm
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "which swarm"
+        type: choice
+        options:
+          - docker/swarm-task.md
+          - docker/rr-swarm-task.md
+          - docker/plan-swarm-task.md
+        default: docker/swarm-task.md
+      model:
+        description: "model for the manager agent (empty = CLI default)"
+        default: ""
+      provider:
+        description: "model provider (kimi sends repo contents to Moonshot - see docker/provider-env.sh)"
+        type: choice
+        options: [anthropic, kimi]
+        default: anthropic
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  swarm:
+    uses: markrthomas/dv-swarm-kit/.github/workflows/swarm-run.yml@v0
+    with:
+      task: ${{ inputs.task }}
+      model: ${{ inputs.model }}
+      provider: ${{ inputs.provider }}
+    secrets:
+      # passed explicitly: `secrets: inherit` only works within one organization/enterprise, not across a
+      # personal account's repos calling dv-swarm-kit
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+      SWARM_GITHUB_TOKEN: ${{ secrets.SWARM_GITHUB_TOKEN }}

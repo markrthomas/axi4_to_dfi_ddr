@@ -1,0 +1,30 @@
+// GitHub Codespaces / VS Code Dev Container.  [swarm-kit: shared file, do not fork per repo]
+//
+// Reuses the repo's OWN Dockerfile `tools` stage — the same pinned toolchain image CI runs every DV job in
+// and Railway builds on — with the Claude Code CLI added (WITH_CLAUDE=1), so a Codespace can run
+//   make batch        # exactly what the Railway cron runs (docker/entrypoint.sh ci)
+//   make swarm        # Swarm A (verification)      — needs the CLAUDE_CODE_OAUTH_TOKEN Codespaces secret
+//   make swarm-rr     # Swarm B (random regression)
+// The repo is mounted (not baked in), so edits are live.
+//
+// Secrets: add CLAUDE_CODE_OAUTH_TOKEN at github.com/settings/codespaces (Codespaces secrets) and tick this
+// repo. Codespaces injects a GITHUB_TOKEN itself, so `PUBLISH_METRICS=1 make batch` can publish to metrics-data.
+// Cold start builds the toolchain from source (Verilator/Yosys: ~20-40 min); enable Codespaces prebuilds on the
+// repo to cache it. UVM/Verilator builds are memory-hungry: pick a 4-core / 16 GB machine or larger.
+{
+  "name": "${localWorkspaceFolderBasename} dv-tools",
+  "build": {
+    "dockerfile": "../Dockerfile",
+    "context": "..",
+    "target": "tools",
+    "args": { "WITH_CLAUDE": "1" }
+  },
+  // `make batch` here does not publish unless asked: PUBLISH_METRICS=1 make batch
+  "remoteEnv": { "PUBLISH_METRICS": "0" },
+  "hostRequirements": { "cpus": 4, "memory": "16gb" },
+  "postCreateCommand": "make swarm-profile && (verilator --version; iverilog -V 2>&1 | head -1; claude --version) || true",
+  "customizations": {
+    "codespaces": { "openFiles": ["CLAUDE.md"] },
+    "vscode": { "extensions": ["mshr-h.veriloghdl", "ms-python.python"] }
+  }
+}
