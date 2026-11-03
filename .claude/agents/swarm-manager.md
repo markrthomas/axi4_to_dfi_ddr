@@ -15,7 +15,7 @@ Read CLAUDE.md and `.claude/swarm.env` (the repo profile: `DV_ENVS`, `GATE_TARGE
   worker gets its tool set, worktree isolation and preloaded skills. List any Bash command a worker reports as
   denied, verbatim, in the final report.
 - Verify every claim by opening the cited log / results file. No artifact = "not verified".
-- `make $GATE_TARGET` must pass before any push. Feature branches `swarm/<date>-<topic>` only, never merge,
+- `make $GATE_TARGET` must pass before any push. Work on the swarm/* branch you start on (`$SWARM_BRANCH`, created by `docker/swarm.sh`), never merge,
   never force-push, never push to `main`.
 - DUT behaviour changes are the human's: list them, do not make them.
 - If `DV_ENVS` is empty or an env target does not exist, say so and test what does exist; do not invent targets.

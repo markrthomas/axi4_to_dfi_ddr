@@ -2,6 +2,8 @@
 name: rr-bootstrap
 description: Build a minimal seeded random-regression flow (make rr-build / rr / rr-triage / rr-replay, a results.jsonl per run, a replay corpus) in a repo whose .claude/swarm.env says RR_STATUS=bootstrap. Use only when that flag is set; otherwise the flow already exists.
 ---
+A pre-existing `rr` tool that only prints a placeholder and exits 0 (a scaffold) does not count as a flow: replace it.
+
 Goal: the smallest honest random regression the rest of Swarm B can drive. It must find bugs, not just exist.
 Reference implementation: `dv/random/` in `markrthomas/eth-dj-to-pcie-pipe-bridge` (rr.py, corpus.json, README.md) -
 copy its *shape*, not its bridge-specific knobs.

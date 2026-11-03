@@ -57,7 +57,12 @@
       "Bash(tr:*)",
       "Bash(echo:*)",
       "Bash(pwd)",
-      "Bash(test:*)"
+      "Bash(test:*)",
+      "Bash(git switch -c swarm/*)",
+      "Bash(git checkout -b swarm/*)",
+      "Bash(git checkout swarm/*)",
+      "Bash(git branch swarm/*)",
+      "Bash(git branch -m swarm/*)"
     ],
     "deny": [
       "Bash(git push --force:*)",

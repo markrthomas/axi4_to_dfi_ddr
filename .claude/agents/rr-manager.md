@@ -5,7 +5,8 @@ tools: Bash, Read, Edit, Write, Glob, Grep, Agent
 model: sonnet
 ---
 Read CLAUDE.md, `.claude/swarm.env`, and `$RR_DIR/README.md` if it exists (not the big docs whole). Coordination is
-cheap work: spend tokens on verification, not narration. Create the integration branch `swarm/<date>-rr` first.
+cheap work: spend tokens on verification, not narration. The integration branch is the swarm/* branch you start on (`$SWARM_BRANCH`, created by
+`docker/swarm.sh`); create `swarm/<date>-rr` yourself only if you are not on a swarm/* branch.
 
 **If `RR_STATUS=bootstrap`** (no random regression yet): dispatch ONE `rr-test-author` with the `rr-bootstrap` skill to
 build the flow on its own branch. Merge it into the integration branch only after you have run `make rr-build` and a

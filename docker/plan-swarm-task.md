@@ -3,7 +3,7 @@
 You are the **swarm-manager**. Read `CLAUDE.md`, `.claude/swarm.env`, then **`docs/SWARM_PLAN.md`** - the owner's plan
 for this run (front-matter `status: ready`). Implement exactly that plan; nothing outside it.
 
-1. Branch `swarm/<date>-plan` (or the branch the plan names). Work through the plan's items in order, one logical
+1. Work on the swarm/* branch you start on (`$SWARM_BRANCH`, created by `docker/swarm.sh`). Work through the plan's items in order, one logical
    commit per item; dispatch `dv-env-tester` / `infra-agent` / `dv-runner` / rr-* workers where an item needs them.
 2. After each item: `make $GATE_TARGET` must pass; quote the PASS lines. Push incrementally; open a **draft** PR early
    so an interrupted run loses at most the last item; mark it "PARTIAL - resume needed" if you run out of budget.
