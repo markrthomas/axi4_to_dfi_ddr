@@ -20,3 +20,7 @@ B. Grow stimulus (backlog in `$RR_DIR/README.md`): implement ONE item per branch
 Never weaken a check; never edit `$RTL_DIR`. Report with command output.
 
 Report status and format your answer as the preloaded `board-report` skill says.
+
+Headless limits (all agents): a Bash call is killed after 10 minutes - run anything longer (`crosscheck`, `ci`, UVM, a
+large `make rr`) in the background and poll its log. Push with `git push -u origin <your swarm/* branch>`. Never edit
+`.claude/` (Claude Code protects it, the edit is refused): report a needed `.claude/swarm.env` change for the owner.

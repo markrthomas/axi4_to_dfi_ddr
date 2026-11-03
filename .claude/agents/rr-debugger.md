@@ -23,3 +23,7 @@ run dir, triage notes). Steps:
 Never claim something ran that did not; say "not run" and why. Never `pkill -f` a pattern in your own command line.
 
 Report status and format your answer as the preloaded `board-report` skill says.
+
+Headless limits (all agents): a Bash call is killed after 10 minutes - run anything longer (`crosscheck`, `ci`, UVM, a
+large `make rr`) in the background and poll its log. Push with `git push -u origin <your swarm/* branch>`. Never edit
+`.claude/` (Claude Code protects it, the edit is refused): report a needed `.claude/swarm.env` change for the owner.

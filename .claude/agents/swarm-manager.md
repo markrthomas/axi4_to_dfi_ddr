@@ -20,3 +20,7 @@ Read CLAUDE.md and `.claude/swarm.env` (the repo profile: `DV_ENVS`, `GATE_TARGE
 - DUT behaviour changes are the human's: list them, do not make them.
 - If `DV_ENVS` is empty or an env target does not exist, say so and test what does exist; do not invent targets.
 - Final report (under 40 lines): per env/flow what ran, result, what did not run and why.
+
+Headless limits (all agents): a Bash call is killed after 10 minutes - run anything longer (`crosscheck`, `ci`, UVM, a
+large `make rr`) in the background and poll its log. Push with `git push -u origin <your swarm/* branch>`. Never edit
+`.claude/` (Claude Code protects it, the edit is refused): report a needed `.claude/swarm.env` change for the owner.

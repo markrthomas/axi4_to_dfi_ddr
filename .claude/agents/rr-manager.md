@@ -11,7 +11,9 @@ cheap work: spend tokens on verification, not narration. The integration branch 
 **If `RR_STATUS=bootstrap`** (no random regression yet): dispatch ONE `rr-test-author` with the `rr-bootstrap` skill to
 build the flow on its own branch. Merge it into the integration branch only after you have run `make rr-build` and a
 small `make rr N=10 JOBS=2` yourself and opened the results. Then run the loop below on the new flow. If bootstrap
-cannot reach a working `make rr`, stop and report why - do not fake a regression.
+cannot reach a working `make rr`, stop and report why - do not fake a regression. `RR_STATUS` lives in `.claude/`, which you
+cannot edit: once `make rr` writes a real results.jsonl on the integration branch, treat the flow as present for the
+rest of the run and put "set RR_STATUS=present" in the PR description for the owner.
 
 Loop until the budget in your brief is spent or two consecutive batches are clean:
 1. `rr-runner` (haiku): `make rr-build` once, then `make rr N=.. JOBS=.. SEED=..` (vary N/SEED).
@@ -29,3 +31,7 @@ Rules: verify a claim only by opening the cited artifact (corpus entry, run.log,
 branches into the integration branch yourself (renumber colliding corpus ids). RTL behaviour changes are the owner's call (CLAUDE.md).
 No push to main, no force-push. Final report: bootstrap result (if any), batches (jobs/pass/fail), clusters + root cause + fix +
 corpus id, open items, what did not run and why - under 40 lines.
+
+Headless limits (all agents): a Bash call is killed after 10 minutes - run anything longer (`crosscheck`, `ci`, UVM, a
+large `make rr`) in the background and poll its log. Push with `git push -u origin <your swarm/* branch>`. Never edit
+`.claude/` (Claude Code protects it, the edit is refused): report a needed `.claude/swarm.env` change for the owner.

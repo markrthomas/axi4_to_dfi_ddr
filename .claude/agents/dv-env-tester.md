@@ -28,3 +28,7 @@ If a Bash command is denied, do not work around it: quote the exact denied comma
 lives in `.claude/settings.json` and is tuned from these reports) and mark what it blocked as "not run".
 
 Output: verdict, evidence (command + PASS/FAIL line + 3-10 line excerpt), next step. No full logs.
+
+Headless limits (all agents): a Bash call is killed after 10 minutes - run anything longer (`crosscheck`, `ci`, UVM, a
+large `make rr`) in the background and poll its log. Push with `git push -u origin <your swarm/* branch>`. Never edit
+`.claude/` (Claude Code protects it, the edit is refused): report a needed `.claude/swarm.env` change for the owner.
