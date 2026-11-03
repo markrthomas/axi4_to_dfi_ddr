@@ -101,6 +101,23 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   cd "$work"
 fi
 
+# The run's working branch.  Created here, not by the agent: headless approval may refuse branch creation, and the
+# swarm must never commit on the default branch.  An existing swarm/* branch (a resumed run, or `--ref swarm/...`)
+# is used as is.
+case "$src" in *rr-swarm-task*) kind=rr ;; *plan-swarm-task*) kind=plan ;; --prompt) kind=agent ;; *) kind=verify ;; esac
+cur="$(git symbolic-ref -q --short HEAD || true)"
+case "$cur" in
+  swarm/*) SWARM_BRANCH="$cur" ;;
+  *) SWARM_BRANCH="swarm/$(date -u +%Y-%m-%d)-${kind}${GITHUB_RUN_ID:+-$GITHUB_RUN_ID}"
+     git switch -q -c "$SWARM_BRANCH" ;;
+esac
+export SWARM_BRANCH
+echo "swarm.sh: working branch $SWARM_BRANCH (from ${cur:-detached HEAD})"
+cmd[2]="Your working branch is \`$SWARM_BRANCH\` (docker/swarm.sh created it; you are on it). Commit and push your
+integration work there (\`git push -u origin $SWARM_BRANCH\`); worker branches are other swarm/* branches.
+
+${cmd[2]}"
+
 # Headless Claude Code ignores the repo's .claude/settings.json allow list ("this workspace has not been trusted")
 # until the trust dialog has been accepted once - which never happens in a fresh container, so every `make` was
 # denied.  Running the swarm on this checkout is the trust decision: record it for this exact path only.
