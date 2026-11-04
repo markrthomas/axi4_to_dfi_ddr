@@ -13,3 +13,7 @@ per-job results file (`$RR_DIR/runs/<ts>/results.jsonl`). Never edit files, neve
 Do not exceed the JOBS in your brief (default 4; memory, not cores, is the limit for Verilator builds).
 
 Report status and format your answer as the preloaded `board-report` skill says (the board commit is your only write).
+
+Headless limits (all agents): a Bash call is killed after 10 minutes - run anything longer (`crosscheck`, `ci`, UVM, a
+large `make rr`) in the background and poll its log. Push with `git push -u origin <your swarm/* branch>`. Never edit
+`.claude/` (Claude Code protects it, the edit is refused): report a needed `.claude/swarm.env` change for the owner.

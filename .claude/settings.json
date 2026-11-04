@@ -30,7 +30,6 @@
       "Bash(git checkout -- rtl/*)",
       "Bash(git checkout -- src/*)",
       "Bash(git checkout -- hdl/*)",
-      "Bash(git merge swarm/*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(git push origin swarm/*)",
@@ -62,7 +61,14 @@
       "Bash(git checkout -b swarm/*)",
       "Bash(git checkout swarm/*)",
       "Bash(git branch swarm/*)",
-      "Bash(git branch -m swarm/*)"
+      "Bash(git branch -m swarm/*)",
+      "Bash(git merge:*)",
+      "Bash(git push origin HEAD:swarm/*)",
+      "Bash(git push -u origin HEAD:swarm/*)",
+      "Bash(git push origin HEAD:refs/heads/swarm/*)",
+      "Bash(git rm:*)",
+      "Bash(git mv:*)",
+      "Bash(git restore:*)"
     ],
     "deny": [
       "Bash(git push --force:*)",
