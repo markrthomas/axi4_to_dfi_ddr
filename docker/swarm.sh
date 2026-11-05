@@ -153,6 +153,46 @@ json.dump({"rc": rc, "agents": rows, "total_cost_usd": d.get("total_cost_usd"),
 PY
 [ "$PWD" != "$home" ] && mkdir -p "$home/docker" && cp -f docker/last-run-metrics.json "$home/docker/"
 echo "swarm.sh: claude exited $rc; usage -> $home/docker/last-run-metrics.json"
+
+# Open the run's draft PR here, not in the agents: `gh` is not in the headless allow list, so a manager told to
+# "open a draft PR" could only push.  Draft only, never merged; a PR-opening problem never changes the exit code.
+# SWARM_OPEN_PR=0 turns it off.  In Actions, GITHUB_TOKEN may open PRs only if the repo allows it
+# (Settings -> Actions -> General -> "Allow GitHub Actions to create and approve pull requests").
+open_pr() {
+  [ "${SWARM_OPEN_PR:-1}" != 0 ] || { echo "swarm.sh: SWARM_OPEN_PR=0 - not opening a PR"; return 0; }
+  [ -n "${GITHUB_TOKEN:-}" ] || { echo "swarm.sh: no GITHUB_TOKEN - not opening a PR"; return 0; }
+  command -v gh >/dev/null || { echo "swarm.sh: gh not installed - not opening a PR"; return 0; }
+  local base n url bf
+  base="$(gh repo view ${GH_REPO:+"$GH_REPO"} --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || true)"
+  base="${base:-main}"
+  git fetch -q origin "$base" 2>/dev/null || { echo "swarm.sh: cannot fetch origin/$base - not opening a PR"; return 0; }
+  # checkpoint committed work the agents did not push (never uncommitted files; a non-fast-forward just fails)
+  if [ "$(git rev-list --count "origin/$base..HEAD" 2>/dev/null || echo 0)" -gt 0 ]; then
+    git push -q -u origin "$SWARM_BRANCH" 2>/dev/null || echo "swarm.sh: did not push $SWARM_BRANCH from here (already pushed or diverged)"
+  fi
+  git fetch -q origin "$SWARM_BRANCH" 2>/dev/null || { echo "swarm.sh: $SWARM_BRANCH was never pushed - no PR (nothing to review)"; return 0; }
+  n="$(git rev-list --count "origin/$base..FETCH_HEAD" 2>/dev/null || echo 0)"
+  [ "$n" -gt 0 ] || { echo "swarm.sh: $SWARM_BRANCH has no commits beyond $base - no PR"; return 0; }
+  url="$(gh pr list ${GH_REPO:+--repo "$GH_REPO"} --head "$SWARM_BRANCH" --state open --json url -q '.[0].url' 2>/dev/null || true)"
+  if [ -n "$url" ]; then echo "swarm.sh: PR already open: $url"; return 0; fi
+  bf="$(mktemp)"
+  {
+    echo "Swarm run (\`$kind\`, claude exit $rc) on \`$SWARM_BRANCH\`: $n commit(s) beyond \`$base\`. Draft - review before merging."
+    [ -n "${GITHUB_RUN_ID:-}" ] && [ -n "${GH_REPO:-}" ] && echo "Run: https://github.com/$GH_REPO/actions/runs/$GITHUB_RUN_ID"
+    echo; echo "## Manager report (last 4000 chars)"; echo
+    python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("result") or "(no report)")' docker/last-run-metrics.json 2>/dev/null || echo "(no report)"
+    echo; echo "---"; echo "🤖 Generated with [Claude Code](https://claude.com/claude-code) (dv-swarm-kit \`docker/swarm.sh\`)"
+  } > "$bf"
+  if url="$(gh pr create ${GH_REPO:+--repo "$GH_REPO"} --draft --base "$base" --head "$SWARM_BRANCH" \
+              --title "swarm ($kind): $SWARM_BRANCH" --body-file "$bf" 2>"$bf.err")"; then
+    echo "swarm.sh: opened draft PR $url"
+  else
+    echo "swarm.sh: could not open the PR: $(cat "$bf.err")" >&2
+    echo "swarm.sh:   open it by hand: https://github.com/${GH_REPO:-<owner/repo>}/compare/$base...$SWARM_BRANCH" >&2
+  fi
+  rm -f "$bf" "$bf.err"
+}
+open_pr || true
 # the manager's final report, in the job log too (the artifact holds the same text plus token usage)
 echo "===== swarm report (last 4000 chars) ====="
 python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("result") or "(no result - see the claude output above)")' docker/last-run-metrics.json || true

@@ -11,8 +11,9 @@ Goal of this run: **re-verify the repository end to end and fix what is broken, 
    (`.github/workflows/*.yml` vs the root `Makefile` targets).
 3. Use `dv-runner` for any long mechanical reruns. Run `make $CROSSCHECK_TARGET` once all envs have results (if set).
 4. If `METRICS=yes`, run `make metrics` once at the end so the run is recorded.
-5. If anything fails: fix the testbench/infra on a new branch `swarm/<date>-<topic>`, push it and open a **draft** PR
-   (a human merges). RTL behaviour changes are out of scope — describe them in the PR instead.
+5. If anything fails: fix the testbench/infra, merge it into your working branch and push it; `docker/swarm.sh`
+   opens the **draft** PR from that branch at the end, with your final message as its description (a human merges).
+   RTL behaviour changes are out of scope — describe them in your final message instead.
 
 Hard rules: never fabricate results (say "not run" and why); never disable or skip a check to get green; never
 force-push or push to `main`; keep `$RTL_DIR` assertion-free; do not set `VERILATOR_ROOT`. Record new decisions where
