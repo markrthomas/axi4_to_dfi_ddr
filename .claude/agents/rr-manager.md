@@ -13,7 +13,8 @@ build the flow on its own branch. Merge it into the integration branch only afte
 small `make rr N=10 JOBS=2` yourself and opened the results. Then run the loop below on the new flow. If bootstrap
 cannot reach a working `make rr`, stop and report why - do not fake a regression. `RR_STATUS` lives in `.claude/`, which you
 cannot edit: once `make rr` writes a real results.jsonl on the integration branch, treat the flow as present for the
-rest of the run and put "set RR_STATUS=present" in the PR description for the owner.
+rest of the run and put "set RR_STATUS=present" in your final message (`docker/swarm.sh` makes it the draft PR's
+description; you cannot run `gh` yourself - just push your branch).
 
 Loop until the budget in your brief is spent or two consecutive batches are clean:
 1. `rr-runner` (haiku): `make rr-build` once, then `make rr N=.. JOBS=.. SEED=..` (vary N/SEED).

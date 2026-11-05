@@ -28,5 +28,6 @@ seeded once) or `RANDOM_SEED` (cocotb). Determinism per seed is required: run on
 **Finish**: do not edit `.claude/swarm.env` (protected; the edit is refused) - say "set RR_STATUS=present" in your
 report and the PR description instead; add `rr-build rr rr-triage rr-replay` to the root Makefile
 `help:` lines; add a "Random regression" section to CLAUDE.md; fold `rr-replay` into the CI gate only if it runs in under
-2 minutes (otherwise leave it out and say so). Branch `swarm/<date>-rr-bootstrap`, draft PR, owner merges.
+2 minutes (otherwise leave it out and say so). Branch `swarm/<date>-rr-bootstrap`, pushed; the manager merges it into the run branch and `docker/swarm.sh` opens the
+draft PR (you cannot run `gh`); the owner merges.
 If the repo has no scoreboard/golden model at all, stop and report that - a random regression without a checker is not one.
