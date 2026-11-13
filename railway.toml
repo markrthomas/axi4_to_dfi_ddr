@@ -5,14 +5,16 @@
 # `docker/entrypoint.sh swarm [--task docker/rr-swarm-task.md]`.
 # Service variables (set in Railway, never in the repo): CLAUDE_CODE_OAUTH_TOKEN (swarm services only),
 # GITHUB_TOKEN (fine-grained, this repo only, Contents read+write), optional METRICS_FLOWS / JOBS.
-# The service's own dashboard settings win over this file for restart policy and cron: set
-# Restart Policy = Never and the Cron Schedule there too (see docs/railway.md in the kit).
+# Runs ON DEMAND (no schedule): when you click Redeploy on the Railway service, or when a push to the deployed
+# branch changes anything except docs (watchPatterns).  To schedule it, add e.g. cronSchedule = "17 3 * * 0"
+# (UTC, no daylight saving) under [deploy].  The service's own dashboard settings win over this file for restart
+# policy and cron: keep Restart Policy = Never and the Cron Schedule field EMPTY there.
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
+# gitignore-style; a `!` rule only removes what an earlier rule matched.  Docs/markdown/CI-only pushes don't run.
+watchPatterns = ["**", "!**/*.md", "!docs/**", "!doc/**", "!.github/**", "!LICENSE*"]
 
 [deploy]
 startCommand = "docker/entrypoint.sh ci"
 restartPolicyType = "NEVER"
-# weekly full run, Sundays 03:17 UTC; remove to run only on deploy
-cronSchedule = "17 3 * * 0"
