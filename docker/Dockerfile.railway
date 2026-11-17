@@ -1,0 +1,23 @@
+# docker/Dockerfile.railway - the Railway batch image, built in about a minute.  [seeded by dv-swarm-kit; repo-owned:
+#   edit freely, the kit never overwrites it]
+#
+# Railway stops any build that runs longer than ~40 minutes, and compiling the DV toolchain from source can exceed that
+# whenever Railway's layer cache misses.  So Railway compiles nothing: it starts from the toolchain image CI already
+# builds and publishes, and adds the repo on top - the same contents as the Dockerfile's final stage (add any ENV / RUN
+# that stage has and the batch needs).  Railway and CI therefore run the same tools.
+#
+# Needs (docs/dockerfile.md in the kit, "Railway"):
+#   - CI publishing the Dockerfile `tools` stage as ghcr.io/<owner>/<repo>/dv-tools:tools-main on pushes to main;
+#   - that package PUBLIC (Railway cannot pull a private base image during a build) - so it must hold only the
+#     toolchain, never repo source.
+# TOOLS_IMAGE: a Railway service variable of the same name overrides it (e.g. a pinned tools-<hash>).  After a merge
+# that changes the Dockerfile, Redeploy once CI has re-tagged tools-main.
+ARG TOOLS_IMAGE=ghcr.io/markrthomas/axi4_to_dfi_ddr/dv-tools:tools-main
+FROM ${TOOLS_IMAGE}
+
+WORKDIR /work
+COPY . /work
+RUN chmod +x docker/*.sh || true
+
+ENTRYPOINT ["/work/docker/entrypoint.sh"]
+CMD []

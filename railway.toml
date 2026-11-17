@@ -9,9 +9,11 @@
 # branch changes anything except docs (watchPatterns).  To schedule it, add e.g. cronSchedule = "17 3 * * 0"
 # (UTC, no daylight saving) under [deploy].  The service's own dashboard settings win over this file for restart
 # policy and cron: keep Restart Policy = Never and the Cron Schedule field EMPTY there.
+# Builds docker/Dockerfile.railway, not the Dockerfile: Railway stops builds at ~40 min, so it starts from the toolchain
+# image CI publishes (ghcr.io/<owner>/<repo>/dv-tools:tools-main, public) instead of compiling it.
 [build]
 builder = "DOCKERFILE"
-dockerfilePath = "Dockerfile"
+dockerfilePath = "docker/Dockerfile.railway"   # prebuilt CI toolchain + the repo (see that file)
 # gitignore-style; a `!` rule only removes what an earlier rule matched.  Docs/markdown/CI-only pushes don't run.
 watchPatterns = ["**", "!**/*.md", "!docs/**", "!doc/**", "!.github/**", "!LICENSE*"]
 
