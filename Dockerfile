@@ -52,9 +52,16 @@ RUN pip install --no-cache-dir --upgrade pip \
 # Claude Code CLI for swarm runs (dv-swarm-kit: devcontainer, swarm workflow, Railway swarm service).
 ARG WITH_CLAUDE=0
 ARG CLAUDE_CODE_VERSION=2.1.322   # pinned: bump on purpose, in a PR
+ARG NODE_MAJOR=22                 # Node.js from NodeSource; Claude Code needs >= 22 (Ubuntu ships 18)
 RUN if [ "$WITH_CLAUDE" = "1" ]; then \
-      apt-get update && apt-get install -y --no-install-recommends nodejs npm gh \
-      && npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} && rm -rf /var/lib/apt/lists/*; \
+      apt-get update && apt-get install -y --no-install-recommends ca-certificates curl gnupg gh \
+      && install -d -m 0755 /etc/apt/keyrings \
+      && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
+      && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" \
+           > /etc/apt/sources.list.d/nodesource.list \
+      && apt-get update && apt-get install -y --no-install-recommends nodejs \
+      && npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
+      && claude --version && rm -rf /var/lib/apt/lists/*; \
     fi
 
 # -----------------------------------------------------------------------------
