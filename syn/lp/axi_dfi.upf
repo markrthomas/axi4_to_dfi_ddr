@@ -1,0 +1,91 @@
+# axi_dfi.upf — IEEE-1801 (UPF) power intent for the AXI4 -> DFI/DDR bridge.
+#
+# Tapeout-readiness program T3 (../../../DESIGN_READINESS.md). Adopted from the sign-off
+# kit's low-power TEMPLATE, tuned to this block's DDR self-refresh power story.
+#
+# Authored collateral — the real run is VCS `-upf` + RTL<->UPF LEC (needs-license);
+# see LP_PLAN.md. A tool-free consistency lint runs here via `make lp`.
+#
+# NOTE: `-elements` instance paths below are the intended mapping; confirm them against
+# the synthesized hierarchy before the licensed run (the lint checks UPF *consistency*,
+# not element existence). Top `axi4_to_dfi_bridge`: the AXI frontend is `u_axi_fe`
+# (axi_aclk domain), the DFI command/scheduler engine is `u_dfi` (dfi_clk domain).
+
+set_design_top axi4_to_dfi_bridge
+
+##############################################################################
+# Power domains — the DDR self-refresh story.
+#   PD_AON : always-on. The AXI4 slave frontend (u_axi_fe) stays powered so a new
+#            host request can trigger exit from DRAM self-refresh.
+#   PD_DFI : switchable. The DFI adapter + DDR command scheduler (u_dfi) is
+#            power-gated while the DRAM is in self-refresh (the DRAM retains its
+#            contents autonomously), and woken on the next host access.
+##############################################################################
+create_power_domain PD_AON -elements {.}
+create_power_domain PD_DFI -elements {u_dfi}
+
+##############################################################################
+# Supply network
+##############################################################################
+create_supply_port  VDD    -domain PD_AON
+create_supply_port  VSS    -domain PD_AON
+create_supply_net   VDD    -domain PD_AON
+create_supply_net   VSS    -domain PD_AON
+create_supply_net   VDD_SW -domain PD_DFI          ;# switched rail for PD_DFI
+
+# Always-on domain is tied to the permanent rails.
+set_domain_supply_net PD_AON -primary_power_net VDD    -primary_ground_net VSS
+# Switchable domain runs from the switched rail (ground is common).
+set_domain_supply_net PD_DFI -primary_power_net VDD_SW -primary_ground_net VSS
+
+##############################################################################
+# Header power switch for PD_DFI (VDD -> VDD_SW), controlled by pmu_dfi_pwr_en.
+##############################################################################
+create_power_switch dfi_hdr_sw \
+    -domain        PD_DFI \
+    -input_supply_port  {vin  VDD} \
+    -output_supply_port {vout VDD_SW} \
+    -control_port  {sw_en pmu_dfi_pwr_en} \
+    -on_state      {on vin {sw_en}} \
+    -off_state     {off {!sw_en}}
+
+##############################################################################
+# Isolation: clamp PD_DFI outputs crossing into PD_AON while PD_DFI is off, so
+# the always-on AXI frontend never samples floating DFI-side status/handshakes.
+##############################################################################
+set_isolation dfi_iso \
+    -domain          PD_DFI \
+    -isolation_power_net VDD \
+    -isolation_ground_net VSS \
+    -clamp_value     0 \
+    -applies_to      outputs
+set_isolation_control dfi_iso \
+    -domain   PD_DFI \
+    -isolation_signal pmu_dfi_iso_en \
+    -isolation_sense  high \
+    -location parent
+
+##############################################################################
+# Retention: keep the scheduler's bank-timing / open-row / configuration state
+# across self-refresh so the command engine resumes without re-training.
+##############################################################################
+set_retention dfi_ret \
+    -domain      PD_DFI \
+    -retention_power_net VDD \
+    -retention_ground_net VSS
+set_retention_control dfi_ret \
+    -domain      PD_DFI \
+    -save_signal    {pmu_dfi_save high} \
+    -restore_signal {pmu_dfi_restore high}
+
+##############################################################################
+# Power states (PST): the legal supply combinations and the P0/P1/P2 modes.
+#   P0 active    : both rails on — normal AXI<->DDR traffic.
+#   P1 drain     : PD_DFI isolated, still powered — scheduler drains in-flight
+#                  commands and issues the self-refresh entry (SRE) to the DRAM.
+#   P2 selfref   : PD_DFI rail off, scheduler state retained; DRAM self-refreshes.
+##############################################################################
+create_pst bridge_pst -supplies {VDD VDD_SW}
+add_pst_state P0_active  -pst bridge_pst -state {ON  ON}
+add_pst_state P1_drain   -pst bridge_pst -state {ON  ON}
+add_pst_state P2_selfref -pst bridge_pst -state {ON  OFF}
