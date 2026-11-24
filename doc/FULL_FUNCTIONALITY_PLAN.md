@@ -282,3 +282,52 @@ Do not call the design full-functionality complete until all of these are true:
 - Refresh uses real REF timing for the selected memory.
 - DFI timing and sideband behavior match the target PHY integration guide.
 - `make -C test ci` passes, plus the longer regression target passes with logged seeds.
+
+---
+
+# Tapeout readiness (design sign-off)
+
+> Part of the workspace program in [`../../DESIGN_READINESS.md`](../../DESIGN_READINESS.md).
+> Gate pass criteria and the tooling/PDK reality live there. Tags: **[oss-pathfind]**,
+> **[needs-license]**, **[needs-pdk]**.
+
+## Realism note specific to this block
+Of the five program blocks, this one carries the **most RTL-completion debt**: today it is a
+*bring-up bridge, not a complete DDR controller* (Phases 1–7 of this document). **It cannot
+enter T1 synthesis sign-off until the controller is functionally real.** Treat Phases 1–7
+above as the **pre-T0/T1 prerequisite**, then layer the T-gates below. DFI and DDR/JEDEC
+specs are public / registration-gated-but-free, so this repo can stay **public** unless a
+JEDEC clause must be reproduced verbatim.
+
+## Prerequisite (from Phases 1–7): close the controller
+Before T1, the gaps already named in this plan must land: general same-ID **response-queue**
+architecture (not one held error/channel); wider **JEDEC timing** (bank groups, `tRC`,
+`tRRD`, `tFAW`) on top of the existing REF/`tRFC`; **DRAM init + MRS programming**, **ZQ
+calibration** hooks; **multi-phase DFI** + update/low-power handshakes matching a real PHY
+integration guide; read/write **leveling** hooks; broaden **formal** beyond the FIFO BMC and
+add a **second simulator**.
+
+## T-gate map
+- **T0 Spec freeze** — freeze the AXI4 feature set actually supported (burst types, narrow/
+  unaligned, FIXED/WRAP), the DFI phase/width profile, and the target DDR generation + speed
+  bin; cite the DFI spec rev and the JEDEC `JESD79`/`JESD209` clauses for every timing param.
+- **T1 Synth [needs-pdk]** — real synthesis; the **data path / any buffering** memory strategy
+  (compiled RAM vs flop); sign-off lint; structural **CDC** across the four `async_fifo_gray`
+  crossings between the AXI and DFI clock domains.
+- **T2 STA [needs-pdk]** — SDC for AXI clk + DFI clk, I/O budgets to the PHY, CDC false-path
+  exceptions; Fmax per domain; the scheduler's per-bank timing must meet the chosen speed bin.
+- **T3 Low-power [needs-license]** — author UPF (DFI LP / self-refresh entry/exit power states);
+  power-aware run; LEC.
+- **T4 DFT [needs-license]** — scan over the scheduler FSM + front-end; MBIST if any RAM; ATPG.
+- **T5 Verif sign-off [needs-license]** — stand up the **UVM DV env (VCS)** named in the repo;
+  SVA on all DRAM command timing; randomized coverage with a documented model + logged seeds;
+  replace directed-only closure.
+- **T6 GLS + PPA [needs-pdk]** — SDF GLS incl. DDR command timing; power; LEC; PPA vs target.
+- **T7 Integration/pkg** — IP-XACT; register/config map; **PHY integration guide** (the DFI
+  sideband contract); AXI address-map; tagged release.
+
+## Ordered milestones
+1. Finish the controller (Phases 1–7 of this doc) — **the long pole; do first.**
+2. T0 freeze (AXI subset + DDR gen/speed-bin + DFI profile) with cited clauses.
+3. Shared kit `syn/sta/lp/dft/pkg` (pathfound on #3). 4. T5 UVM + SVA + randomized coverage.
+5. T1/T2 synth+CDC+STA. 6. T3/T4 low-power + DFT. 7. T6 GLS/PPA. 8. T7 package + tag.
