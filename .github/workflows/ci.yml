@@ -57,3 +57,26 @@ jobs:
 
       - name: cocotb OSS UVM-equivalent tests (DFI bridge)
         run: make cocotb
+
+  signoff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update && sudo apt-get install -y yosys
+
+      - name: T1 synthesizability gate (latch-free + area/timing-proxy ceilings)
+        run: make synth
+
+      - name: Structural AXI<->DFI CDC audit
+        run: make cdc
+
+      - name: Upload gate-level netlist
+        uses: actions/upload-artifact@v4
+        with:
+          name: synth-netlist
+          path: sim/synth_netlist.v
+          if-no-files-found: ignore
