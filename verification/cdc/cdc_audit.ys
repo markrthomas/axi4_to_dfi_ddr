@@ -1,0 +1,26 @@
+# Structural clock-domain-crossing (CDC) audit for axi4_to_dfi_bridge.
+#
+# Contract: every CDC between the AXI (axi_aclk) and DFI (dfi_clk) domains must
+# pass through a sanctioned synchronizer — async_fifo_gray (Gray-pointer dual-clock
+# data FIFO) or cdc_sync (2-flop level synchronizer). We blackbox those so a path
+# *through* one terminates at its boundary, then assert no axi_aclk-domain flop
+# reaches a dfi_clk-domain flop's data cone (or vice versa) without one. Fails
+# (non-zero exit) via select -assert-count on any violation. Run with `make cdc`.
+read_verilog -Isrc \
+  src/cdc_fifo_lib.v src/mc_dfi_scheduler.v src/axi4_bridge_frontend.v \
+  src/dfi_adapter.v src/axi4_to_dfi_bridge.v
+blackbox async_fifo_gray cdc_sync
+hierarchy -top axi4_to_dfi_bridge
+proc
+flatten
+opt_clean
+select -assert-min 1 t:async_fifo_gray
+select -assert-min 1 t:cdc_sync
+select -set ffs  t:$adff* t:$dff* t:$dffe* t:$sdff* t:$dlatch*
+select -set dfff n:dfi_clk  %co @ffs %i
+select -set axff n:axi_aclk %co @ffs %i
+select -set xing_a2d @dfff %ci*:-async_fifo_gray:-cdc_sync @axff %i
+select -set xing_d2a @axff %ci*:-async_fifo_gray:-cdc_sync @dfff %i
+select -assert-count 0 @xing_a2d
+select -assert-count 0 @xing_d2a
+log CDC-AUDIT: no unsynchronized clock-domain crossings.

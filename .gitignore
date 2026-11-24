@@ -21,3 +21,8 @@ coverage.info
 .codex
 /verification/random/runs/
 /docker/last-run-metrics.json
+
+# tapeout-readiness synth/cdc artifacts
+sim/synth.log
+sim/cdc.log
+sim/synth_netlist.v

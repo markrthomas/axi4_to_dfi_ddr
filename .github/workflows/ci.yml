@@ -57,3 +57,33 @@ jobs:
 
       - name: cocotb OSS UVM-equivalent tests (DFI bridge)
         run: make cocotb
+
+  signoff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # Modern Yosys via the OSS CAD Suite (apt's yosys is too old for `ltp -noff` and
+      # has different generic cell naming — matches the suite used by the sim/formal jobs).
+      - name: Setup OSS CAD Suite (yosys) — retry transient download flakes
+        uses: Wandalen/wretry.action@v3
+        with:
+          action: YosysHQ/setup-oss-cad-suite@v3
+          with: |
+            github-token: ${{ github.token }}
+          attempt_limit: 3
+          attempt_delay: 15000
+
+      - name: T1 synthesizability gate (latch-free + area/timing-proxy ceilings)
+        run: make synth
+
+      - name: Structural AXI<->DFI CDC audit
+        run: make cdc
+
+      - name: Upload gate-level netlist
+        uses: actions/upload-artifact@v4
+        with:
+          name: synth-netlist
+          path: sim/synth_netlist.v
+          if-no-files-found: ignore

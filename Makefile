@@ -13,7 +13,7 @@ BRIDGE_SRCS := src/cdc_fifo_lib.v src/mc_dfi_scheduler.v src/axi4_bridge_fronten
                src/dfi_adapter.v src/axi4_to_dfi_bridge.v
 COV_DIR := obj_dir_cov
 
-.PHONY: help clean run test sim build vcd wave doc doc-html ci audit syn-check formal-fifo formal-fifo-dual-clock \
+.PHONY: help clean run test sim build vcd wave doc doc-html ci audit syn-check synth cdc formal-fifo formal-fifo-dual-clock \
         lint check regress coverage formal cocotb
 
 help:
@@ -76,6 +76,46 @@ check: lint sim
 regress: lint
 	$(MAKE) -C test run run-smoke run-smoke-zc run-smoke-refresh run-smoke-tras
 	@echo "[REGRESS] lint + directed sim PASSED"
+
+# synth: T1 synthesizability + area/timing-proxy gate (Yosys, OSS — no PDK).
+#   1. no inferred latches ($_DLATCH_); 2. cell count <= SYNTH_MAX_CELLS (area
+#   ceiling); 3. longest topological logic depth (ltp) <= SYNTH_MAX_DEPTH (a
+#   liberty-free critical-path proxy). Emits a flat gate netlist (sim/synth_netlist.v).
+#   Ceilings set above the current design (13090 cells / depth 46) to absorb
+#   yosys drift while catching real ballooning. Part of the tapeout-readiness
+#   program — see syn/SIGNOFF.md. Requires yosys on PATH.
+SYNTH_MAX_CELLS ?= 18000
+SYNTH_MAX_DEPTH ?= 70
+synth:
+	@set -e; \
+	command -v yosys >/dev/null 2>&1 || { echo "[SYNTH] yosys not on PATH; skipping"; exit 0; }; \
+	echo "[SYNTH] synthesizing (generic gate map, flattened)..."; mkdir -p sim; \
+	yosys -p "read_verilog -Isrc $(BRIDGE_SRCS); \
+		synth -top axi4_to_dfi_bridge -flatten; \
+		stat; ltp -noff; write_verilog sim/synth_netlist.v" > sim/synth.log 2>&1; \
+	if grep -qE '\$$_DLATCH' sim/synth.log; then echo "[SYNTH] FAIL: inferred latch cells!"; exit 1; fi; \
+	cells=$$(grep -oE '[0-9]+ cells$$' sim/synth.log | tail -1 | grep -oE '[0-9]+'); \
+	depth=$$(grep -oE 'length=[0-9]+' sim/synth.log | tail -1 | grep -oE '[0-9]+'); \
+	echo "[SYNTH] cells=$${cells:-?} logic-depth(ltp)=$${depth:-?} ceilings: cells<=$(SYNTH_MAX_CELLS) depth<=$(SYNTH_MAX_DEPTH)"; \
+	echo "[SYNTH] netlist: sim/synth_netlist.v (full log: sim/synth.log)"; \
+	fail=0; \
+	if [ -n "$$cells" ] && [ "$$cells" -gt "$(SYNTH_MAX_CELLS)" ]; then echo "[SYNTH] FAIL: cells $$cells > $(SYNTH_MAX_CELLS)"; fail=1; fi; \
+	if [ -n "$$depth" ] && [ "$$depth" -gt "$(SYNTH_MAX_DEPTH)" ]; then echo "[SYNTH] FAIL: depth $$depth > $(SYNTH_MAX_DEPTH)"; fail=1; fi; \
+	[ "$$fail" -eq 0 ] || exit 1; \
+	echo "[SYNTH] PASS: no latches; area & timing-proxy within ceilings"
+
+# cdc: structural clock-domain-crossing audit (Yosys). Blackboxes the sanctioned
+#   synchronizers (async_fifo_gray, cdc_sync) then asserts no axi_aclk<->dfi_clk flop
+#   crossing bypasses one. Fails (non-zero) on any unsynchronized crossing. This is
+#   the real multi-clock CDC gate this block needs (vs single-clock siblings).
+cdc:
+	@set -e; \
+	command -v yosys >/dev/null 2>&1 || { echo "[CDC] yosys not on PATH; skipping"; exit 0; }; \
+	echo "[CDC] auditing AXI<->DFI clock-domain crossings..."; mkdir -p sim; \
+	yosys verification/cdc/cdc_audit.ys > sim/cdc.log 2>&1 || { \
+		echo "[CDC] FAIL: unsynchronized clock-domain crossing (see sim/cdc.log)"; \
+		grep -i 'Assertion failed' sim/cdc.log || true; exit 1; }; \
+	echo "[CDC] PASS: every AXI<->DFI crossing goes through a sanctioned synchronizer"
 
 # coverage: Verilator --coverage build + run; emits coverage.info (lcov format).
 coverage:
