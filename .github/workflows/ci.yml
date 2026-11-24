@@ -81,9 +81,22 @@ jobs:
       - name: Structural AXI<->DFI CDC audit
         run: make cdc
 
+      - name: T4 DFT scan-readiness audit (latch-free + no comb loops + flop inventory)
+        run: make dft
+
+      - name: T3 low-power UPF consistency lint
+        run: make lp
+
       - name: Upload gate-level netlist
         uses: actions/upload-artifact@v4
         with:
           name: synth-netlist
           path: sim/synth_netlist.v
+          if-no-files-found: ignore
+
+      - name: Upload DFT scan-readiness reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: dft-reports
+          path: syn/dft/reports/
           if-no-files-found: ignore

@@ -13,7 +13,7 @@ BRIDGE_SRCS := src/cdc_fifo_lib.v src/mc_dfi_scheduler.v src/axi4_bridge_fronten
                src/dfi_adapter.v src/axi4_to_dfi_bridge.v
 COV_DIR := obj_dir_cov
 
-.PHONY: help clean run test sim build vcd wave doc doc-html ci audit syn-check synth cdc formal-fifo formal-fifo-dual-clock \
+.PHONY: help clean run test sim build vcd wave doc doc-html ci audit syn-check synth cdc dft lp formal-fifo formal-fifo-dual-clock \
         lint check regress coverage formal cocotb
 
 help:
@@ -116,6 +116,21 @@ cdc:
 		echo "[CDC] FAIL: unsynchronized clock-domain crossing (see sim/cdc.log)"; \
 		grep -i 'Assertion failed' sim/cdc.log || true; exit 1; }; \
 	echo "[CDC] PASS: every AXI<->DFI crossing goes through a sanctioned synchronizer"
+
+# dft: T4 DFT scan-readiness audit (Yosys, OSS — no PDK). On the synthesized netlist,
+#      asserts latch-free + no combinational loops (HARD gates) and inventories flops /
+#      reset controllability / async set-reset / RAM for scan planning. Scan insertion +
+#      ATPG = needs-license (see syn/dft/DFT_PLAN.md). Part of the tapeout-readiness program.
+dft:
+	@command -v yosys >/dev/null 2>&1 || { echo "[DFT] yosys not on PATH; skipping"; exit 0; }
+	@bash $(CURDIR)/syn/dft/scan_readiness.sh
+
+# lp: T3 low-power UPF consistency lint (tclsh, OSS — no PDK). Cross-checks the IEEE-1801
+#     UPF (domains / supplies / isolation / retention / power-state table) for internal
+#     consistency. Power-aware sim + RTL<->UPF LEC = needs-license (see syn/lp/LP_PLAN.md).
+lp:
+	@command -v tclsh >/dev/null 2>&1 || { echo "[LP] tclsh not on PATH; skipping"; exit 0; }
+	@tclsh $(CURDIR)/syn/lp/upf_lint.tcl $(CURDIR)/syn/lp/axi_dfi.upf
 
 # coverage: Verilator --coverage build + run; emits coverage.info (lcov format).
 coverage:
