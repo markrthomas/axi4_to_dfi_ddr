@@ -87,6 +87,26 @@ jobs:
       - name: T3 low-power UPF consistency lint
         run: make lp
 
+      - name: T6 GLS (zero-delay gate-level sim vs the directed self-checking TB)
+        run: make gls
+
+      - name: T6 PPA proxy baseline (cells / flops / logic-depth)
+        run: make ppa
+
+      - name: T7 packaging — IP-XACT well-formed + structural + port-sync with RTL
+        run: |
+          command -v xmllint >/dev/null 2>&1 || sudo apt-get update && sudo apt-get install -y libxml2-utils
+          make pkg
+
+      - name: Upload T6 GLS + PPA reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: t6-reports
+          path: |
+            syn/gls/reports/
+            syn/ppa/reports/
+          if-no-files-found: ignore
+
       - name: Upload gate-level netlist
         uses: actions/upload-artifact@v4
         with:

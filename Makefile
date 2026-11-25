@@ -13,7 +13,7 @@ BRIDGE_SRCS := src/cdc_fifo_lib.v src/mc_dfi_scheduler.v src/axi4_bridge_fronten
                src/dfi_adapter.v src/axi4_to_dfi_bridge.v
 COV_DIR := obj_dir_cov
 
-.PHONY: help clean run test sim build vcd wave doc doc-html ci audit syn-check synth cdc dft lp formal-fifo formal-fifo-dual-clock \
+.PHONY: help clean run test sim build vcd wave doc doc-html ci audit syn-check synth cdc dft lp gls ppa pkg formal-fifo formal-fifo-dual-clock \
         lint check regress coverage formal cocotb
 
 help:
@@ -131,6 +131,23 @@ dft:
 lp:
 	@command -v tclsh >/dev/null 2>&1 || { echo "[LP] tclsh not on PATH; skipping"; exit 0; }
 	@tclsh $(CURDIR)/syn/lp/upf_lint.tcl $(CURDIR)/syn/lp/axi_dfi.upf
+
+# gls: T6 zero-delay gate-level sim (Yosys + Icarus, OSS — no PDK). Synthesizes the top to
+#      a generic-gate netlist (at the TB's param overrides) and runs the directed
+#      self-checking TB against it. SDF-timing GLS + Liberty map = needs-pdk (syn/gls/T6_PLAN.md).
+gls:
+	@bash $(CURDIR)/syn/gls/gls.sh
+
+# ppa: T6 PPA proxy baseline (Yosys, OSS — no PDK). Tracks generic cells + flops (area) and
+#      logic depth / ltp (timing) per top. Real area/power/timing = needs-pdk (syn/ppa/PPA_PLAN.md).
+ppa:
+	@bash $(CURDIR)/syn/ppa/ppa.sh
+
+# pkg: T7 packaging gate (OSS). Validates the IP-XACT (IEEE 1685-2014) component:
+#      well-formed + structural + a hard IP-XACT<->RTL model-port match (fails on drift).
+pkg:
+	@command -v xmllint >/dev/null 2>&1 || { echo "[PKG] xmllint not on PATH; skipping"; exit 0; }
+	@bash $(CURDIR)/pkg/check_ipxact.sh
 
 # coverage: Verilator --coverage build + run; emits coverage.info (lcov format).
 coverage:
