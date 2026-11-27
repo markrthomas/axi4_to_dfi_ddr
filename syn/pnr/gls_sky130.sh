@@ -41,7 +41,7 @@ NLP=""
 [ -f "$ROOT/syn/signoff.env" ] && { set -a; . "$ROOT/syn/signoff.env"; set +a; }
 cd "$ROOT"
 TOPS="$TOP" RTL="${RTL:-src/$TOP.v}" OUT="$ROOT/syn/pnr/reports" \
-GLS_NETLIST_DIR="$NL" GLS_NETLIST_PARAMS="$NLP" \
+GLS_NETLIST_DIR="$NL" GLS_NETLIST_PARAMS="$NLP" GLS_HEARTBEAT_NS="${GLS_HEARTBEAT_NS:-10000}" \
 GLS_CELL_MODELS="$V/primitives.v $V/sky130_fd_sc_hd.v" \
 GLS_DEFINES="-DFUNCTIONAL -DUNIT_DELAY=#1" \
 GLS_LABEL="sky130_fd_sc_hd routed netlist (LibreLane final/nl, functional, unit delay)" \

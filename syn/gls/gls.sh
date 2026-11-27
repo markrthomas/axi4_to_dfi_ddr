@@ -40,6 +40,10 @@
 #   OUT/BUILD   report / build dirs (default syn/gls/reports, syn/gls/build)
 #   External-netlist mode (all optional; GLS_NETLIST_DIR switches it on):
 #   GLS_NETLIST_DIR  dir holding <top>.nl.v (e.g. LibreLane runs/<tag>/final/nl)
+#   GLS_HEARTBEAT_NS  >0: also compile a top-level heartbeat that prints "[GLS-HB] t=<ns>"
+#                    every N ns of sim time, so a timeout shows whether time was still
+#                    advancing (functional/X hang) or stuck (zero-delay delta loop). Default 0.
+#   GLS_TIMEOUT      wall-clock seconds per TB before it is FAILed as a hang (default 3600).
 #   GLS_NETLIST_PARAMS "NAME=VAL …" the netlist was built at (beyond the RTL defaults);
 #                    a TB integer override that differs from the built value FAILs.
 #   GLS_CELL_MODELS  cell model files (e.g. sky130_fd_sc_hd primitives.v + cell .v)
@@ -231,7 +235,14 @@ for TOP in $TOPS; do
   results=""; top_ok=1
   for t in $tbs; do
     nm="$(basename "$t" .v)"; bin="$BUILD/sim_gls_${TOP}_$nm"; runlog="$OUT/$TOP.$nm.gls.log"
-    if ! iverilog -g2012 $DEFS $tb_incs -o "$bin" "$t" $TB_EXTRA "$netp" $MODELS 2> "$BUILD/$TOP.$nm.iverilog.log"; then
+    HB=""
+    if [ "${GLS_HEARTBEAT_NS:-0}" -gt 0 ] 2>/dev/null; then
+      HB="$BUILD/gls_heartbeat.v"
+      printf '%s\n' '`timescale 1ns/1ps' 'module gls_heartbeat;' \
+        "  initial forever begin #${GLS_HEARTBEAT_NS}; \$display(\"[GLS-HB] t=%0d ns\", \$time); end" \
+        'endmodule' > "$HB"
+    fi
+    if ! iverilog -g2012 $DEFS $tb_incs -o "$bin" "$t" $TB_EXTRA "$netp" $MODELS $HB 2> "$BUILD/$TOP.$nm.iverilog.log"; then
       echo "[GLS] $TOP/$nm: FAIL — gate-level compile error (see $BUILD/$TOP.$nm.iverilog.log):"
       grep -iE 'error' "$BUILD/$TOP.$nm.iverilog.log" | head; top_ok=0
       results="$results\n  testbench ......... $t: FAIL (compile)"; continue
@@ -243,7 +254,10 @@ for TOP in $TOPS; do
     # These TBs run free clocks, so the sim only ends via $finish/$fatal; a hang is
     # caught by the timeout below (FAIL), not by a log string.
     vrc=0; timeout "${GLS_TIMEOUT:-3600}" vvp -n "$bin" > "$runlog" 2>&1 || vrc=$?
-    [ $vrc -eq 124 ] && echo "[GLS] $TOP/$nm: TIMEOUT after ${GLS_TIMEOUT:-3600}s (hang?)" >> "$runlog"
+    if [ $vrc -eq 124 ]; then
+      lhb="$(grep -E '^\[GLS-HB\]' "$runlog" | tail -1 || true)"
+      echo "[GLS] $TOP/$nm: TIMEOUT after ${GLS_TIMEOUT:-3600}s (hang?)${lhb:+; last heartbeat ${lhb#*] }}" >> "$runlog"
+    fi
     if [ $vrc -eq 0 ] \
        && grep -qiE '\bPASS(ED)?\b' "$runlog" \
        && ! grep -viE '^[[:space:]]*PASS(ED)?\b' "$runlog" | grep -qiE 'FAIL|ERROR|MISMATCH|FATAL|TIMEOUT'; then

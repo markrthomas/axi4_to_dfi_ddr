@@ -73,6 +73,8 @@ jobs:
 
       - name: Post-route GLS on the sky130 netlist (directed TB + compliance bench)
         if: always() && hashFiles(format('syn/pnr/{0}/runs/ci/final/nl/{0}.nl.v', matrix.top)) != ''
+        env:
+          GLS_TIMEOUT: 900   # the generic-netlist GLS of this TB takes ~11 s; a hang should fail fast
         run: bash syn/pnr/gls_sky130.sh ${{ matrix.top }}
 
       - name: Upload GDS, netlists, SDF/SPEF, reports
