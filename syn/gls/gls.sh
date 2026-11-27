@@ -219,12 +219,17 @@ for TOP in $TOPS; do
       grep -iE 'error' "$BUILD/$TOP.$nm.iverilog.log" | head; top_ok=0
       results="$results\n  testbench ......... $t: FAIL (compile)"; continue
     fi
-    vvp -n "$bin" > "$runlog" 2>&1 || true
-    # PASS token is a whole word (\b…\b excludes BYPASS etc.); matches PASS, PASS:, PASSED.
-    # Exclusion is substring FAIL/ERROR/MISMATCH (SLVERR ≠ ERROR, so AXI err names are safe).
-    if grep -qiE '\bPASS(ED)?\b' "$runlog" \
-       && ! grep -qiE 'FAIL|ERROR|MISMATCH' "$runlog" \
-       && grep -qE '\$finish' "$runlog"; then
+    # Pass = vvp exit 0 (a $fatal exits 1) + a PASS marker + no failure marker
+    # (substring, any case) on any line that is not itself a PASS line, so a passing
+    # test NAMED e.g. "PASS smoke error_injection" is not read as an error. No
+    # "$finish called" requirement: vvp prints it for $finish(1|2) but not $finish(0).
+    # These TBs run free clocks, so the sim only ends via $finish/$fatal; a hang is
+    # caught by the timeout below (FAIL), not by a log string.
+    vrc=0; timeout "${GLS_TIMEOUT:-3600}" vvp -n "$bin" > "$runlog" 2>&1 || vrc=$?
+    [ $vrc -eq 124 ] && echo "[GLS] $TOP/$nm: TIMEOUT after ${GLS_TIMEOUT:-3600}s (hang?)" >> "$runlog"
+    if [ $vrc -eq 0 ] \
+       && grep -qiE '\bPASS(ED)?\b' "$runlog" \
+       && ! grep -viE '^[[:space:]]*PASS(ED)?\b' "$runlog" | grep -qiE 'FAIL|ERROR|MISMATCH|FATAL|TIMEOUT'; then
       echo "[GLS] $TOP/$nm: PASS"
       results="$results\n  testbench ......... $t: PASS ($(grep -iE '\bPASS(ED)?\b' "$runlog" | head -1 | sed 's/^[[:space:]]*//'))"
     else
