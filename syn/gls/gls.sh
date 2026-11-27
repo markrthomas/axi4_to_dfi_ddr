@@ -265,7 +265,10 @@ for TOP in $TOPS; do
       results="$results\n  testbench ......... $t: PASS ($(grep -iE '\bPASS(ED)?\b' "$runlog" | head -1 | sed 's/^[[:space:]]*//'))"
     else
       echo "[GLS] $TOP/$nm: FAIL — gate-level sim did not pass (see $runlog):"
-      tail -15 "$runlog"; top_ok=0
+      nf="$(grep -viE '^[[:space:]]*PASS(ED)?\b' "$runlog" | grep -ciE 'FAIL|ERROR|MISMATCH|FATAL|TIMEOUT' || true)"
+      echo "  first failure lines ($nf total):"
+      grep -viE '^[[:space:]]*PASS(ED)?\b' "$runlog" | grep -iE 'FAIL|ERROR|MISMATCH|FATAL|TIMEOUT' | head -10 | sed 's/^/    /' || true
+      echo "  last lines:"; tail -8 "$runlog" | sed 's/^/    /'; top_ok=0
       results="$results\n  testbench ......... $t: FAIL (see $(basename "$runlog"))"
     fi
   done
