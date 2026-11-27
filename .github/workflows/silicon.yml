@@ -1,0 +1,92 @@
+# Kit template (templates/signoff/pnr/silicon.yml): copy to .github/workflows/silicon.yml.
+# PRIVATE repos: Actions minutes are billed; drop the pull_request/push triggers and
+# keep workflow_dispatch only.
+# sky130 silicon run (tapeout-readiness T2/T6): RTL-to-GDS with LibreLane, the
+# OpenLane successor. Per top: synthesis, floorplan, PDN, placement, CTS, routing,
+# extraction, multi-corner STA against the repo SDC, DRC, LVS, and
+# area/power (summary: syn/pnr/reports/<top>.pnr.rpt, syn/pnr/summarize.py); then
+# functional GLS of the routed netlist with the sky130 cell models
+# (syn/pnr/gls_sky130.sh -> syn/pnr/reports/<top>.gls.rpt).
+#
+# Heavy (Docker + PDK download + P&R), so it runs on demand (Actions → silicon →
+# Run workflow) or when a change touches the RTL or the physical-design inputs.
+name: silicon
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'syn/constraints/**'
+      - 'syn/pnr/**'
+      - '.github/workflows/silicon.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'syn/constraints/**'
+      - 'syn/pnr/**'
+      - '.github/workflows/silicon.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: silicon-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pnr:
+    name: sky130 ${{ matrix.top }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        top: [axi4_to_dfi_bridge]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install LibreLane
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install --upgrade librelane
+          python3 -m librelane --version
+
+      - name: Cache the sky130 PDK (ciel)
+        uses: actions/cache@v4
+        with:
+          path: ~/.ciel
+          key: ciel-sky130-${{ runner.os }}-librelane-${{ hashFiles('.github/workflows/silicon.yml') }}
+
+      - name: RTL-to-GDS (LibreLane Classic flow, dockerized)
+        id: pnr
+        run: bash syn/pnr/run_pnr.sh ${{ matrix.top }}
+
+      - name: Icarus Verilog for post-route GLS
+        if: always() && hashFiles(format('syn/pnr/{0}/runs/ci/final/nl/{0}.nl.v', matrix.top)) != ''
+        run: sudo apt-get update && sudo apt-get install -y iverilog && iverilog -V 2>&1 | head -1
+
+      - name: Post-route GLS on the sky130 netlist (directed TB + compliance bench)
+        if: always() && hashFiles(format('syn/pnr/{0}/runs/ci/final/nl/{0}.nl.v', matrix.top)) != ''
+        env:
+          GLS_TIMEOUT: 900   # the generic-netlist GLS of this TB takes ~11 s; a hang should fail fast
+        run: bash syn/pnr/gls_sky130.sh ${{ matrix.top }}
+
+      - name: Upload GDS, netlists, SDF/SPEF, reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sky130-${{ matrix.top }}
+          path: |
+            syn/pnr/reports/${{ matrix.top }}.*
+            syn/pnr/${{ matrix.top }}/runs/ci/final/
+            syn/pnr/${{ matrix.top }}/runs/ci/resolved.json
+            syn/pnr/${{ matrix.top }}/runs/ci/flow.log
+            syn/pnr/${{ matrix.top }}/runs/ci/*/*.log
+            syn/pnr/${{ matrix.top }}/runs/ci/*-openroad-stapostpnr/**/*.rpt
+          if-no-files-found: warn

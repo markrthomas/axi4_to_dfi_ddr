@@ -1,0 +1,24 @@
+{
+  "//": "Release manifest for scripts/make_release.py (kit templates/signoff/release/). T0 is OPEN: there is no contract tag/doc yet, so the release workflow's pre-flight refuses to publish. At T0 freeze: write doc/design_contract.md, tag contract-v1.0, add it below as kind 'contract' and to required_kinds.",
+  "name": "axi4-to-dfi-ddr",
+  "repo": "markrthomas/axi4_to_dfi_ddr",
+  "contract_tag": "contract-v1.0",
+  "contract_doc": "doc/design_contract.md",
+  "report_glob": "syn/**/reports/*",
+  "required_kinds": ["rtl", "ip-xact", "signoff"],
+  "deliverables": [
+    {"path": "src/cdc_fifo_lib.v",               "kind": "rtl"},
+    {"path": "src/mc_dfi_scheduler.v",           "kind": "rtl"},
+    {"path": "src/axi4_bridge_frontend.v",       "kind": "rtl"},
+    {"path": "src/dfi_adapter.v",                "kind": "rtl"},
+    {"path": "src/axi4_to_dfi_bridge.v",         "kind": "rtl"},
+    {"path": "pkg/ip-xact/axi4_to_dfi_bridge.xml", "kind": "ip-xact"},
+    {"path": "pkg/INTEGRATION.md",               "kind": "doc"},
+    {"path": "pkg/RELEASE.md",                   "kind": "doc"},
+    {"path": "syn/SIGNOFF.md",                   "kind": "signoff"},
+    {"path": "syn/constraints/axi_dfi.sdc",      "kind": "constraints"},
+    {"path": "syn/lp/axi_dfi.upf",               "kind": "constraints"},
+    {"path": "README.md",                        "kind": "doc"},
+    {"path": "LICENSE",                          "kind": "license"}
+  ]
+}

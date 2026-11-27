@@ -1,0 +1,164 @@
+# Kit template (templates/signoff/release/release.yml): copy to .github/workflows/release.yml,
+# set RELEASE_GATES to the repo's gate targets. Needs pkg/release.json + scripts/make_release.py.
+# PRIVATE repos: each tag run re-runs every gate on billed minutes.
+# IP release (tapeout-readiness T7, pkg/RELEASE.md).
+#
+# Push an annotated tag vX.Y.Z on a main commit whose CI is green:
+#   git tag -a v1.0.0 -m "IP release 1.0.0 (contract 1.0)"
+#   git push https://github.com/markrthomas/<repo>.git v1.0.0
+# This job then re-runs the gates on a runner, builds the reproducible bundle with
+# that version, verifies it against MANIFEST.json and publishes the GitHub
+# release (bundle + .sha256, notes from pkg/RELEASE_NOTES.md).
+#
+# On a pull request that touches the release flow it runs as a dry run: same
+# gates, build and verify, with version 0.0.0-dryrun, and nothing is published.
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+  pull_request:
+    paths:
+      - '.github/workflows/release.yml'
+      - 'scripts/make_release.py'
+      - 'pkg/RELEASE.md'
+      - 'pkg/RELEASE_NOTES.md'
+      - 'pkg/release.json'
+
+permissions:
+  contents: write   # create the GitHub release (tag runs only)
+  checks: read      # read CI results for the tagged commit
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # full history + tags (contract tag, main ancestry)
+
+      - name: Resolve mode and version
+        id: v
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "mode=publish" >> "$GITHUB_OUTPUT"
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=dry-run" >> "$GITHUB_OUTPUT"
+            echo "version=0.0.0-dryrun" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Release name (pkg/release.json)
+        id: n
+        run: echo "name=$(python3 -c 'import json;print(json.load(open("pkg/release.json"))["name"])')" >> "$GITHUB_OUTPUT"
+
+      - name: Pre-flight (tag runs) — on main, T0 frozen, CI green, notes match, no existing release
+        if: steps.v.outputs.mode == 'publish'
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          set -euo pipefail
+          SHA=$(git rev-parse HEAD)
+          git fetch -q origin main
+          git merge-base --is-ancestor "$SHA" origin/main \
+            || { echo "::error::tag ${GITHUB_REF_NAME} (${SHA:0:7}) is not on main"; exit 1; }
+          NAME=$(python3 -c 'import json;print(json.load(open("pkg/release.json"))["name"])')
+          grep -q "^# ${NAME} v${VERSION}\b" pkg/RELEASE_NOTES.md \
+            || { echo "::error::pkg/RELEASE_NOTES.md heading is not '${NAME} v${VERSION}'"; exit 1; }
+          # T0 must be frozen: the contract tag (pkg/release.json contract_tag) and the
+          # contract doc must exist. A block whose spec is still open cannot be released.
+          read -r CT CD < <(python3 -c 'import json;c=json.load(open("pkg/release.json"));print(c.get("contract_tag") or "-", c.get("contract_doc") or "-")')
+          git rev-parse -q --verify "refs/tags/${CT}" >/dev/null \
+            || { echo "::error::contract tag '${CT}' not found: T0 spec freeze is not done; not releasing"; exit 1; }
+          [ -f "${CD}" ] || { echo "::error::contract doc '${CD}' missing; not releasing"; exit 1; }
+          grep -q "contract" <(python3 -c 'import json;print(" ".join(d["kind"] for d in json.load(open("pkg/release.json"))["deliverables"]))') \
+            || { echo "::error::pkg/release.json ships no 'contract' deliverable; add the contract doc"; exit 1; }
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            echo "::error::release ${GITHUB_REF_NAME} already exists; delete it or tag a new version"; exit 1
+          fi
+          # Every CI / UVM-on-Verilator / plumbing check on the tagged commit must have succeeded.
+          gh api "repos/${GITHUB_REPOSITORY}/commits/${SHA}/check-runs?per_page=100" \
+            --jq '.check_runs[] | select(.name != "release") | "\(.name)=\(.conclusion)"' | sort -u > checks.txt
+          cat checks.txt
+          [ -s checks.txt ] || { echo "::error::no CI results found for ${SHA:0:7}"; exit 1; }
+          if grep -v '=success$' checks.txt; then
+            echo "::error::CI is not green on ${SHA:0:7}; not releasing"; exit 1
+          fi
+
+      - name: Setup OSS CAD Suite — retry transient download flakes
+        uses: Wandalen/wretry.action@v3
+        with:
+          action: YosysHQ/setup-oss-cad-suite@v3
+          with: |
+            github-token: ${{ github.token }}
+          attempt_limit: 3
+          attempt_delay: 15000
+
+      - name: Tools for the packaging gate
+        run: command -v xmllint >/dev/null 2>&1 || { sudo apt-get update && sudo apt-get install -y libxml2-utils; }
+
+      # The make gate targets print "skipping" and exit 0 when a tool is missing.
+      # A release must never count a skip as a pass, so require every tool here.
+      - name: Require every gate tool (a skip is not a pass)
+        run: |
+          set -e
+          for t in yosys iverilog vvp sby verilator xmllint python3; do
+            command -v "$t" >/dev/null || { echo "::error::$t not on PATH; a gate would be skipped"; exit 1; }
+            echo "$t: $(command -v $t)"
+          done
+          yosys -V; iverilog -V 2>&1 | head -1
+
+      # Adapt the gate list to the repo (RELEASE_GATES). Every target must exist and
+      # pass; reports under syn/**/reports go into the bundle.
+      - name: Gates
+        env:
+          RELEASE_GATES: "check formal synth cdc dft lp gls ppa"
+        run: make $RELEASE_GATES
+
+      - name: Restore the IEEE 1685-2014 schema mirror (fixed standard)
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/ipxact-1685-2014
+          key: ipxact-1685-2014-xsd-v3-${{ hashFiles('pkg/ip-xact/schema/ieee-1685-2014.sha256') }}
+
+      - name: "Gates — T7 IP-XACT structure + RTL sync + full XSD (strict: the host must serve the schema)"
+        run: make pkg pkg-xsd
+
+      - name: Save the schema mirror (only once it is complete)
+        if: always() && hashFiles('.cache/ipxact-1685-2014/.complete') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/ipxact-1685-2014
+          key: ipxact-1685-2014-xsd-v3-${{ hashFiles('pkg/ip-xact/schema/ieee-1685-2014.sha256') }}
+        continue-on-error: true   # key already saved by another run
+
+      - name: Build release bundle
+        run: make release VERSION=${{ steps.v.outputs.version }}
+
+      - name: Verify bundle against MANIFEST.json
+        run: |
+          make release-verify VERSION=${{ steps.v.outputs.version }}
+          ( cd dist && sha256sum -c ${{ steps.n.outputs.name }}-${{ steps.v.outputs.version }}.tar.gz.sha256 )
+          tar xzf dist/${{ steps.n.outputs.name }}-${{ steps.v.outputs.version }}.tar.gz -O \
+            ${{ steps.n.outputs.name }}-${{ steps.v.outputs.version }}/MANIFEST.json \
+            | python3 -c 'import json,sys; m=json.load(sys.stdin); print("commit", m["source"]["commit"][:7], "dirty", m["source"]["dirty"], "contract", m["contract"]); [print(" ", g, v) for g, v in m["gates"].items()]; print(" files:", len(m["files"]), "gate reports:", sum(e["kind"]=="gate-report" for e in m["files"]))'
+
+      - name: Upload bundle (artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ steps.v.outputs.version }}
+          path: dist/
+
+      - name: Publish GitHub release
+        if: steps.v.outputs.mode == 'publish'
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            "dist/${{ steps.n.outputs.name }}-${{ steps.v.outputs.version }}.tar.gz" \
+            "dist/${{ steps.n.outputs.name }}-${{ steps.v.outputs.version }}.tar.gz.sha256" \
+            --title "${GITHUB_REF_NAME}" --notes-file pkg/RELEASE_NOTES.md --verify-tag

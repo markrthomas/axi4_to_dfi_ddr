@@ -13,9 +13,11 @@
 #                      gate if the package drifts from the RTL (a renamed/added/removed
 #                      port). Port *widths* are parametric expressions in the XML and are
 #                      reviewed against the design contract, not re-derived here.
-# Full XSD schema validation is an optional extra: set IPXACT_XSD=/path/to/index.xsd to
-# enable it (the 1685-2014 schema is not redistributed here). Absent that, a skip is
-# reported honestly as "not run", never as a pass.
+# Full XSD schema validation: set IPXACT_XSD=/path/to/index.xsd, or run `make pkg-xsd`,
+# which fetches the 1685-2014 schema with fetch_ipxact_xsd.py (Accellera, eda.org or a
+# pinned GitHub copy; every file checked against pkg/ip-xact/schema/ieee-1685-2014.sha256).
+# IPXACT_XSD unset is reported as "not run", never as a pass; IPXACT_XSD set to a
+# missing file is a FAIL.
 #
 # Config (env or edit the defaults below):
 #   TOPS     space-separated top module names (one component XML per top)
@@ -54,7 +56,7 @@ for TOP in $TOPS; do
   if [ -n "$miss" ]; then echo "[PKG] $TOP: FAIL — missing IP-XACT elements:$miss"; rc=1; continue; fi
 
   # 3) RTL-in-sync — model ports (XML) must equal RTL module ports
-  xml_ports="$(grep -oE '<ipxact:port><ipxact:name>[A-Za-z0-9_]+' "$xml" | sed -E 's|.*<ipxact:name>||' | sort -u)"
+  xml_ports="$(grep -oE '<ipxact:port><ipxact:name>[A-Za-z0-9_]+' "$xml" | sed -E 's|.*<ipxact:name>||' | sort -u || true)"
   rtl_ports="$(awk -v top="$TOP" '
       $0 ~ "^[ \t]*module[ \t]+"top"[ \t]*[#(]" {m=1}
       m && /^[ \t]*(input|output|inout)[ \t]/ {
@@ -77,14 +79,22 @@ for TOP in $TOPS; do
 done
 
 # optional: full XSD schema validation when a local schema is provided
-if [ -n "${IPXACT_XSD:-}" ] && [ -f "${IPXACT_XSD}" ]; then
+XSD_RUN=0
+if [ -n "${IPXACT_XSD:-}" ] && [ ! -f "${IPXACT_XSD}" ]; then
+  echo "[PKG] XSD schema validation: FAIL — IPXACT_XSD=$IPXACT_XSD does not exist"; rc=1
+elif [ -n "${IPXACT_XSD:-}" ]; then
+  XSD_RUN=1
   echo "[PKG] XSD schema validation against $IPXACT_XSD"
   for TOP in $TOPS; do
-    xmllint --noout --schema "$IPXACT_XSD" "$XML_DIR/$TOP.xml" || rc=1
+    if xmllint --noout --nonet --schema "$IPXACT_XSD" "$XML_DIR/$TOP.xml"; then
+      echo "[PKG] $TOP: XSD valid (IEEE 1685-2014)"
+    else
+      echo "[PKG] $TOP: FAIL — XSD schema validation"; rc=1
+    fi
   done
 else
   echo "[PKG] XSD schema validation: not run (set IPXACT_XSD to the 1685-2014 index.xsd to enable) — this is 'not run', not a pass."
 fi
 
-[ $rc -eq 0 ] && echo "[PKG] T7 packaging gate PASSED (IP-XACT well-formed + structural + in sync with RTL)."
+[ $rc -eq 0 ] && echo "[PKG] T7 packaging gate PASSED (IP-XACT well-formed + structural + in sync with RTL$([ $XSD_RUN -eq 1 ] && echo " + XSD-valid"))."
 exit $rc

@@ -95,8 +95,37 @@ jobs:
 
       - name: T7 packaging — IP-XACT well-formed + structural + port-sync with RTL
         run: |
-          command -v xmllint >/dev/null 2>&1 || sudo apt-get update && sudo apt-get install -y libxml2-utils
+          command -v xmllint >/dev/null 2>&1 || { sudo apt-get update && sudo apt-get install -y libxml2-utils; }
           make pkg
+
+      - name: Restore the IEEE 1685-2014 schema mirror (fixed standard)
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/ipxact-1685-2014
+          key: ipxact-1685-2014-xsd-v3-${{ hashFiles('pkg/ip-xact/schema/ieee-1685-2014.sha256') }}
+
+      - name: T7 IP-XACT full XSD validation (IEEE 1685-2014; Accellera, eda.org or pinned GitHub copy)
+        run: make pkg-xsd XSD_HOST_OPTIONAL=1
+
+      - name: Save the schema mirror (only once it is complete)
+        if: always() && hashFiles('.cache/ipxact-1685-2014/.complete') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/ipxact-1685-2014
+          key: ipxact-1685-2014-xsd-v3-${{ hashFiles('pkg/ip-xact/schema/ieee-1685-2014.sha256') }}
+        continue-on-error: true   # key already saved by another run
+
+      - name: T7 release bundle dry run (reproducible build + manifest verify; T0 open, so not publishable)
+        run: |
+          make release-check
+          mkdir -p dist && cp /tmp/rel-a/* dist/
+
+      - name: Upload release bundle (CI dry-run build, version 0.0.0-ci)
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-bundle-dryrun
+          path: dist/
+          if-no-files-found: error
 
       - name: Upload T6 GLS + PPA reports
         uses: actions/upload-artifact@v4

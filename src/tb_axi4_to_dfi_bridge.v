@@ -53,6 +53,9 @@ module tb;
     reg dfi_rst_n;
 
     initial axi_aclk = 1'b0;
+    // DUT inputs are driven with non-blocking assignments (race-free vs the DUT's flops even
+    // when the clock reaches them through buffers, e.g. a CTS tree in post-route GLS: with
+    // blocking drives at the clock edge the flops sampled the NEW value and the TB hung).
     always #10 axi_aclk = ~axi_aclk; // 50 MHz
 
     initial dfi_clk = 1'b0;
@@ -269,15 +272,15 @@ module tb;
     task tb_flush_axi_rsp;
         begin
             while (s_axi_rvalid) begin
-                s_axi_rready = 1'b1;
+                s_axi_rready <= 1'b1;
                 @(posedge axi_aclk);
             end
-            s_axi_rready = 1'b0;
+            s_axi_rready <= 1'b0;
             while (s_axi_bvalid) begin
-                s_axi_bready = 1'b1;
+                s_axi_bready <= 1'b1;
                 @(posedge axi_aclk);
             end
-            s_axi_bready = 1'b0;
+            s_axi_bready <= 1'b0;
         end
     endtask
 
@@ -318,9 +321,9 @@ module tb;
 
     // Tie unused DFI handshakes (no update traffic)
     initial begin
-        dfi_ctrlupd_ack = 1'b0;
-        dfi_phyupd_ack  = 1'b0;
-        dfi_lp_ctrl_ack = 1'b0;
+        dfi_ctrlupd_ack <= 1'b0;
+        dfi_phyupd_ack  <= 1'b0;
+        dfi_lp_ctrl_ack <= 1'b0;
     end
 
     //-------------------------------------------------------------------------
@@ -409,31 +412,31 @@ module tb;
     //-------------------------------------------------------------------------
     task axi_idle;
         begin
-            s_axi_awvalid  = 1'b0;
-            s_axi_wvalid   = 1'b0;
-            s_axi_arvalid  = 1'b0;
+            s_axi_awvalid  <= 1'b0;
+            s_axi_wvalid   <= 1'b0;
+            s_axi_arvalid  <= 1'b0;
             // Hold low until a response is visible (avoid 1-cycle B/R with bready=1).
-            s_axi_bready   = 1'b0;
-            s_axi_rready   = 1'b0;
-            s_axi_awlen    = 8'd0;
-            s_axi_arlen    = 8'd0;
-            s_axi_awsize   = AXI_SIZE_FULL;
-            s_axi_arsize   = AXI_SIZE_FULL;
-            s_axi_awburst  = 2'b01;
-            s_axi_arburst  = 2'b01;
-            s_axi_awlock   = 1'b0;
-            s_axi_arlock   = 1'b0;
-            s_axi_awcache  = 4'b0;
-            s_axi_arcache  = 4'b0;
-            s_axi_awprot   = 3'b0;
-            s_axi_arprot   = 3'b0;
-            s_axi_awqos    = 4'b0;
-            s_axi_arqos    = 4'b0;
-            s_axi_awregion = 4'b0;
-            s_axi_arregion = 4'b0;
-            s_axi_awuser   = {USER_W{1'b0}};
-            s_axi_wuser    = {USER_W{1'b0}};
-            s_axi_aruser   = {USER_W{1'b0}};
+            s_axi_bready   <= 1'b0;
+            s_axi_rready   <= 1'b0;
+            s_axi_awlen    <= 8'd0;
+            s_axi_arlen    <= 8'd0;
+            s_axi_awsize   <= AXI_SIZE_FULL;
+            s_axi_arsize   <= AXI_SIZE_FULL;
+            s_axi_awburst  <= 2'b01;
+            s_axi_arburst  <= 2'b01;
+            s_axi_awlock   <= 1'b0;
+            s_axi_arlock   <= 1'b0;
+            s_axi_awcache  <= 4'b0;
+            s_axi_arcache  <= 4'b0;
+            s_axi_awprot   <= 3'b0;
+            s_axi_arprot   <= 3'b0;
+            s_axi_awqos    <= 4'b0;
+            s_axi_arqos    <= 4'b0;
+            s_axi_awregion <= 4'b0;
+            s_axi_arregion <= 4'b0;
+            s_axi_awuser   <= {USER_W{1'b0}};
+            s_axi_wuser    <= {USER_W{1'b0}};
+            s_axi_aruser   <= {USER_W{1'b0}};
         end
     endtask
 
@@ -446,18 +449,18 @@ module tb;
         input [C_AXI_DATA_WIDTH-1:0]   data;
         input [STROBE_W-1:0]           strb;
         begin
-            s_axi_awid    = id;
-            s_axi_awaddr  = addr;
-            s_axi_wdata   = data;
-            s_axi_wstrb   = strb;
-            s_axi_wlast   = 1'b1;
-            s_axi_awvalid = 1'b1;
-            s_axi_wvalid  = 1'b1;
+            s_axi_awid    <= id;
+            s_axi_awaddr  <= addr;
+            s_axi_wdata   <= data;
+            s_axi_wstrb   <= strb;
+            s_axi_wlast   <= 1'b1;
+            s_axi_awvalid <= 1'b1;
+            s_axi_wvalid  <= 1'b1;
             @(posedge axi_aclk);
             while (!(s_axi_awready && s_axi_wready))
                 @(posedge axi_aclk);
-            s_axi_awvalid = 1'b0;
-            s_axi_wvalid  = 1'b0;
+            s_axi_awvalid <= 1'b0;
+            s_axi_wvalid  <= 1'b0;
         end
     endtask
 
@@ -469,27 +472,27 @@ module tb;
         input [C_AXI_DATA_WIDTH-1:0]   first_data;
         integer k;
         begin
-            s_axi_awid    = id;
-            s_axi_awaddr  = base_addr;
-            s_axi_awlen   = awlen;
-            s_axi_awburst = 2'b01;
-            s_axi_awvalid = 1'b1;
+            s_axi_awid    <= id;
+            s_axi_awaddr  <= base_addr;
+            s_axi_awlen   <= awlen;
+            s_axi_awburst <= 2'b01;
+            s_axi_awvalid <= 1'b1;
             @(posedge axi_aclk);
             while (!s_axi_awready)
                 @(posedge axi_aclk);
-            s_axi_awvalid = 1'b0;
+            s_axi_awvalid <= 1'b0;
 
             for (k = 0; k <= awlen; k = k + 1) begin
-                s_axi_wdata   = first_data + (k * 64'h8);
-                s_axi_wstrb   = 8'hFF;
-                s_axi_wlast   = (k == awlen);
-                s_axi_wvalid  = 1'b1;
+                s_axi_wdata   <= first_data + (k * 64'h8);
+                s_axi_wstrb   <= 8'hFF;
+                s_axi_wlast   <= (k == awlen);
+                s_axi_wvalid  <= 1'b1;
                 @(posedge axi_aclk);
                 while (!s_axi_wready)
                     @(posedge axi_aclk);
-                s_axi_wvalid  = 1'b0;
+                s_axi_wvalid  <= 1'b0;
             end
-            s_axi_awlen = 8'd0;
+            s_axi_awlen <= 8'd0;
         end
     endtask
 
@@ -499,24 +502,24 @@ module tb;
         input [C_AXI_DATA_WIDTH-1:0]   data;
         input [STROBE_W-1:0]           strb;
         begin
-            s_axi_awid    = id;
-            s_axi_awaddr  = addr;
-            s_axi_awvalid = 1'b1;
+            s_axi_awid    <= id;
+            s_axi_awaddr  <= addr;
+            s_axi_awvalid <= 1'b1;
             @(posedge axi_aclk);
             while (!s_axi_awready)
                 @(posedge axi_aclk);
-            s_axi_awvalid = 1'b0;
+            s_axi_awvalid <= 1'b0;
 
             repeat (2) @(posedge axi_aclk);
 
-            s_axi_wdata   = data;
-            s_axi_wstrb   = strb;
-            s_axi_wlast   = 1'b1;
-            s_axi_wvalid  = 1'b1;
+            s_axi_wdata   <= data;
+            s_axi_wstrb   <= strb;
+            s_axi_wlast   <= 1'b1;
+            s_axi_wvalid  <= 1'b1;
             @(posedge axi_aclk);
             while (!s_axi_wready)
                 @(posedge axi_aclk);
-            s_axi_wvalid  = 1'b0;
+            s_axi_wvalid  <= 1'b0;
         end
     endtask
 
@@ -526,24 +529,24 @@ module tb;
         input [C_AXI_DATA_WIDTH-1:0]   data;
         input [STROBE_W-1:0]           strb;
         begin
-            s_axi_wdata   = data;
-            s_axi_wstrb   = strb;
-            s_axi_wlast   = 1'b1;
-            s_axi_wvalid  = 1'b1;
+            s_axi_wdata   <= data;
+            s_axi_wstrb   <= strb;
+            s_axi_wlast   <= 1'b1;
+            s_axi_wvalid  <= 1'b1;
             @(posedge axi_aclk);
             while (!s_axi_wready)
                 @(posedge axi_aclk);
-            s_axi_wvalid  = 1'b0;
+            s_axi_wvalid  <= 1'b0;
 
             repeat (2) @(posedge axi_aclk);
 
-            s_axi_awid    = id;
-            s_axi_awaddr  = addr;
-            s_axi_awvalid = 1'b1;
+            s_axi_awid    <= id;
+            s_axi_awaddr  <= addr;
+            s_axi_awvalid <= 1'b1;
             @(posedge axi_aclk);
             while (!s_axi_awready)
                 @(posedge axi_aclk);
-            s_axi_awvalid = 1'b0;
+            s_axi_awvalid <= 1'b0;
         end
     endtask
 
@@ -552,25 +555,25 @@ module tb;
         input [C_AXI_ID_WIDTH-1:0]     id;
         input [C_AXI_DATA_WIDTH-1:0]   data;
         begin
-            s_axi_awid     = id;
-            s_axi_awaddr   = addr;
-            s_axi_awlen    = 8'd0;
-            s_axi_awburst  = 2'b00;
-            s_axi_awvalid  = 1'b1;
+            s_axi_awid     <= id;
+            s_axi_awaddr   <= addr;
+            s_axi_awlen    <= 8'd0;
+            s_axi_awburst  <= 2'b00;
+            s_axi_awvalid  <= 1'b1;
             @(posedge axi_aclk);
             while (!s_axi_awready)
                 @(posedge axi_aclk);
-            s_axi_awvalid  = 1'b0;
+            s_axi_awvalid  <= 1'b0;
 
-            s_axi_wdata   = data;
-            s_axi_wstrb   = 8'hFF;
-            s_axi_wlast   = 1'b1;
-            s_axi_wvalid  = 1'b1;
+            s_axi_wdata   <= data;
+            s_axi_wstrb   <= 8'hFF;
+            s_axi_wlast   <= 1'b1;
+            s_axi_wvalid  <= 1'b1;
             @(posedge axi_aclk);
             while (!s_axi_wready)
                 @(posedge axi_aclk);
-            s_axi_wvalid  = 1'b0;
-            s_axi_awburst = 2'b01;
+            s_axi_wvalid  <= 1'b0;
+            s_axi_awburst <= 2'b01;
         end
     endtask
 
@@ -587,11 +590,11 @@ module tb;
                 $display("FAIL: BRESP not OKAY: %b", s_axi_bresp);
                 errors = errors + 1;
             end
-            s_axi_bready = 1'b1;
+            s_axi_bready <= 1'b1;
             @(posedge axi_aclk);
             // Let response FIFO nonblocking updates expose any prefetched next beat.
             #1;
-            s_axi_bready = 1'b0;
+            s_axi_bready <= 1'b0;
         end
     endtask
 
@@ -608,11 +611,11 @@ module tb;
                 $display("FAIL: SLVERR BRESP exp 10 got %b", s_axi_bresp);
                 errors = errors + 1;
             end
-            s_axi_bready = 1'b1;
+            s_axi_bready <= 1'b1;
             @(posedge axi_aclk);
             // Let response FIFO nonblocking updates expose any prefetched next beat.
             #1;
-            s_axi_bready = 1'b0;
+            s_axi_bready <= 1'b0;
         end
     endtask
 
@@ -644,11 +647,11 @@ module tb;
                 $display("FAIL: BRESP not OKAY: %b", s_axi_bresp);
                 errors = errors + 1;
             end
-            s_axi_bready = 1'b1;
+            s_axi_bready <= 1'b1;
             @(posedge axi_aclk);
             // Let response FIFO nonblocking updates expose any prefetched next beat.
             #1;
-            s_axi_bready = 1'b0;
+            s_axi_bready <= 1'b0;
             while (s_axi_bvalid && (s_axi_bid === held_bid))
                 @(posedge axi_aclk);
         end
@@ -661,15 +664,15 @@ module tb;
         input [C_AXI_ADDR_WIDTH-1:0] addr;
         input [C_AXI_ID_WIDTH-1:0]     id;
         begin
-            s_axi_arid    = id;
-            s_axi_araddr  = addr;
-            s_axi_arlen   = 8'd0;
-            s_axi_arvalid = 1'b1;
+            s_axi_arid    <= id;
+            s_axi_araddr  <= addr;
+            s_axi_arlen   <= 8'd0;
+            s_axi_arvalid <= 1'b1;
             @(posedge axi_aclk);
             while (!s_axi_arready)
                 @(posedge axi_aclk);
             tb_push_read_addr(s_axi_araddr);
-            s_axi_arvalid = 1'b0;
+            s_axi_arvalid <= 1'b0;
         end
     endtask
 
@@ -681,12 +684,12 @@ module tb;
         integer                        bi;
         reg [C_AXI_ADDR_WIDTH-1:0]     beat_a;
         begin
-            s_axi_arid    = id;
-            s_axi_araddr  = base_addr;
-            s_axi_arlen   = arlen;
-            s_axi_arburst = 2'b01;
-            s_axi_arsize  = AXI_SIZE_FULL;
-            s_axi_arvalid = 1'b1;
+            s_axi_arid    <= id;
+            s_axi_araddr  <= base_addr;
+            s_axi_arlen   <= arlen;
+            s_axi_arburst <= 2'b01;
+            s_axi_arsize  <= AXI_SIZE_FULL;
+            s_axi_arvalid <= 1'b1;
             @(posedge axi_aclk);
             while (!s_axi_arready)
                 @(posedge axi_aclk);
@@ -694,9 +697,9 @@ module tb;
                 beat_a = base_addr + (bi * (C_AXI_DATA_WIDTH / 8));
                 tb_push_read_addr(beat_a);
             end
-            s_axi_arvalid = 1'b0;
+            s_axi_arvalid <= 1'b0;
             #1;
-            s_axi_arlen   = 8'd0;
+            s_axi_arlen   <= 8'd0;
         end
     endtask
 
@@ -704,15 +707,15 @@ module tb;
         input [C_AXI_ADDR_WIDTH-1:0] addr;
         input [C_AXI_ID_WIDTH-1:0]     id;
         begin
-            s_axi_arid    = id;
-            s_axi_araddr  = addr;
-            s_axi_arsize  = 3'd2;
-            s_axi_arvalid = 1'b1;
+            s_axi_arid    <= id;
+            s_axi_araddr  <= addr;
+            s_axi_arsize  <= 3'd2;
+            s_axi_arvalid <= 1'b1;
             @(posedge axi_aclk);
             while (!s_axi_arready)
                 @(posedge axi_aclk);
-            s_axi_arvalid = 1'b0;
-            s_axi_arsize  = AXI_SIZE_FULL;
+            s_axi_arvalid <= 1'b0;
+            s_axi_arsize  <= AXI_SIZE_FULL;
         end
     endtask
 
@@ -738,11 +741,11 @@ module tb;
                 $display("FAIL: RLAST not set");
                 errors = errors + 1;
             end
-            s_axi_rready = 1'b1;
+            s_axi_rready <= 1'b1;
             @(posedge axi_aclk);
             // Let response FIFO nonblocking updates expose any prefetched next beat.
             #1;
-            s_axi_rready = 1'b0;
+            s_axi_rready <= 1'b0;
         end
     endtask
 
@@ -777,10 +780,10 @@ module tb;
                     $display("FAIL: burst RLAST beat %0d exp %b got %b", bk, exp_last, s_axi_rlast);
                     errors = errors + 1;
                 end
-                s_axi_rready = 1'b1;
+                s_axi_rready <= 1'b1;
                 @(posedge axi_aclk);
                 #1;
-                s_axi_rready = 1'b0;
+                s_axi_rready <= 1'b0;
             end
         end
     endtask
@@ -807,11 +810,11 @@ module tb;
                 $display("FAIL: SLVERR RLAST not set");
                 errors = errors + 1;
             end
-            s_axi_rready = 1'b1;
+            s_axi_rready <= 1'b1;
             @(posedge axi_aclk);
             // Let response FIFO nonblocking updates expose any prefetched next beat.
             #1;
-            s_axi_rready = 1'b0;
+            s_axi_rready <= 1'b0;
         end
     endtask
 
@@ -867,11 +870,11 @@ module tb;
                 $display("FAIL: RLAST not set");
                 errors = errors + 1;
             end
-            s_axi_rready = 1'b1;
+            s_axi_rready <= 1'b1;
             @(posedge axi_aclk);
             // Let response FIFO nonblocking updates expose any prefetched next beat.
             #1;
-            s_axi_rready = 1'b0;
+            s_axi_rready <= 1'b0;
             while (s_axi_rvalid && (s_axi_rid === held_rid) && (s_axi_rdata === held_rdata))
                 @(posedge axi_aclk);
         end
@@ -887,20 +890,20 @@ module tb;
         $display("[TB] stress LFSR seed = 0x%08h", tb_rng_state);
         mon_en = 1'b0;
         tb_read_addr_wr_ptr = 0;
-        axi_aresetn = 1'b0;
-        dfi_rst_n   = 1'b0;
-        dfi_init_complete = 1'b0;
+        axi_aresetn <= 1'b0;
+        dfi_rst_n   <= 1'b0;
+        dfi_init_complete <= 1'b0;
         axi_idle;
-        s_axi_awid = 0;
-        s_axi_arid = 0;
-        s_axi_awaddr = 0;
-        s_axi_araddr = 0;
-        s_axi_wdata = 0;
-        s_axi_wstrb = 0;
+        s_axi_awid <= 0;
+        s_axi_arid <= 0;
+        s_axi_awaddr <= 0;
+        s_axi_araddr <= 0;
+        s_axi_wdata <= 0;
+        s_axi_wstrb <= 0;
 
         repeat (5) @(posedge axi_aclk);
         @(negedge dfi_clk);
-        dfi_rst_n = 1'b1;
+        dfi_rst_n <= 1'b1;
         tb_init_start_hi = 0;
         repeat (12) @(posedge dfi_clk) begin
             if (dfi_init_start)
@@ -911,7 +914,7 @@ module tb;
             errors = errors + 1;
         end
         repeat (3) @(posedge axi_aclk);
-        axi_aresetn = 1'b1;
+        axi_aresetn <= 1'b1;
 
         repeat (4) @(posedge axi_aclk);
 
@@ -931,32 +934,32 @@ module tb;
                 errors = errors + 1;
             end
         end
-        dfi_init_complete = 1'b1;
+        dfi_init_complete <= 1'b1;
         axi_wait_b(4'hA);
 
         repeat (6) @(posedge axi_aclk);
 
         // --- Test 2: unsupported requests must complete with SLVERR ---
         // INCR bursts up to AWLEN=3 are supported; use FIXED burst (illegal shape)
-        s_axi_awid     = 4'hC;
-        s_axi_awaddr   = 32'h0000_0200;
-        s_axi_awlen    = 8'd0;
-        s_axi_awburst  = 2'b00;
-        s_axi_awvalid  = 1'b1;
+        s_axi_awid     <= 4'hC;
+        s_axi_awaddr   <= 32'h0000_0200;
+        s_axi_awlen    <= 8'd0;
+        s_axi_awburst  <= 2'b00;
+        s_axi_awvalid  <= 1'b1;
         @(posedge axi_aclk);
         while (!s_axi_awready)
             @(posedge axi_aclk);
-        s_axi_awvalid  = 1'b0;
+        s_axi_awvalid  <= 1'b0;
 
-        s_axi_wdata   = 64'h11112222_33334444;
-        s_axi_wstrb   = 8'hFF;
-        s_axi_wlast   = 1'b1;
-        s_axi_wvalid  = 1'b1;
+        s_axi_wdata   <= 64'h11112222_33334444;
+        s_axi_wstrb   <= 8'hFF;
+        s_axi_wlast   <= 1'b1;
+        s_axi_wvalid  <= 1'b1;
         @(posedge axi_aclk);
         while (!s_axi_wready)
             @(posedge axi_aclk);
-        s_axi_wvalid  = 1'b0;
-        s_axi_awburst = 2'b01;
+        s_axi_wvalid  <= 1'b0;
+        s_axi_awburst <= 2'b01;
 
         while (!s_axi_bvalid)
             @(posedge axi_aclk);
@@ -968,19 +971,19 @@ module tb;
             $display("FAIL: BRESP mismatch exp %b got %b", 2'b10, s_axi_bresp);
             errors = errors + 1;
         end
-        s_axi_bready = 1'b1;
+        s_axi_bready <= 1'b1;
         @(posedge axi_aclk);
-        s_axi_bready = 1'b0;
+        s_axi_bready <= 1'b0;
 
-        s_axi_arid    = 4'hD;
-        s_axi_araddr  = 32'h0000_0210;
-        s_axi_arsize  = 3'd2;
-        s_axi_arvalid = 1'b1;
+        s_axi_arid    <= 4'hD;
+        s_axi_araddr  <= 32'h0000_0210;
+        s_axi_arsize  <= 3'd2;
+        s_axi_arvalid <= 1'b1;
         @(posedge axi_aclk);
         while (!s_axi_arready)
             @(posedge axi_aclk);
-        s_axi_arvalid = 1'b0;
-        s_axi_arsize  = AXI_SIZE_FULL;
+        s_axi_arvalid <= 1'b0;
+        s_axi_arsize  <= AXI_SIZE_FULL;
 
         axi_wait_r_slverr(4'hD);
 
@@ -1033,7 +1036,7 @@ module tb;
 
         // --- Test 8: memory-controller open-page / row-miss / cold-bank (DFI command counts) ---
         // Realign PHY read queue (test 2 AR is illegal size; no push from axi_read_single)
-        s_axi_arvalid = 1'b0;
+        s_axi_arvalid <= 1'b0;
         tb_clear_read_addr_q;
         tb_read_model_rst = 1'b1;
         repeat (12) @(posedge dfi_clk);
@@ -1089,9 +1092,9 @@ module tb;
         axi_wait_r_burst(4'hE, tb_mc_addr(3'd6, 14'd201, 10'd0), 8'd3);
 
         // --- Test 9: RRESP async FIFO (depth 8) backs up with RREADY low; drain in issue order ---
-        s_axi_arvalid = 1'b0;
+        s_axi_arvalid <= 1'b0;
         tb_flush_axi_rsp;
-        s_axi_rready = 1'b0;
+        s_axi_rready <= 1'b0;
         tb_clear_read_addr_q;
         tb_read_model_rst = 1'b1;
         repeat (12) @(posedge dfi_clk);
@@ -1127,7 +1130,7 @@ module tb;
 
         // --- Test 10: BRESP async FIFO (depth 8) backs up with BREADY low; drain in completion order ---
         tb_flush_axi_rsp;
-        s_axi_bready = 1'b0;
+        s_axi_bready <= 1'b0;
         tb_wait_dfi_mc(64);
         axi_write_single(tb_mc_addr(3'd2, 14'd88, 10'd0), 4'h0, 64'hB0DF0000_00000000, 8'hFF);
         repeat (2) @(posedge axi_aclk);
@@ -1156,22 +1159,22 @@ module tb;
         axi_wait_b(4'h7);
 
         // --- Test 11: illegal INCR read with ARLEN > C_MAX_READ_ARLEN -> SLVERR (no rreq / PHY queue) ---
-        s_axi_arid    = 4'h4;
-        s_axi_araddr  = tb_mc_addr(3'd3, 14'd50, 10'd0);
-        s_axi_arlen   = 8'd4;
-        s_axi_arburst = 2'b01;
-        s_axi_arsize  = AXI_SIZE_FULL;
-        s_axi_arvalid = 1'b1;
+        s_axi_arid    <= 4'h4;
+        s_axi_araddr  <= tb_mc_addr(3'd3, 14'd50, 10'd0);
+        s_axi_arlen   <= 8'd4;
+        s_axi_arburst <= 2'b01;
+        s_axi_arsize  <= AXI_SIZE_FULL;
+        s_axi_arvalid <= 1'b1;
         @(posedge axi_aclk);
         while (!s_axi_arready)
             @(posedge axi_aclk);
-        s_axi_arvalid = 1'b0;
-        s_axi_arlen   = 8'd0;
+        s_axi_arvalid <= 1'b0;
+        s_axi_arlen   <= 8'd0;
         axi_wait_r_slverr(4'h4);
 
         // --- Test 12: two outstanding reads with different ARID complete in MC FIFO order ---
         tb_flush_axi_rsp;
-        s_axi_rready = 1'b0;
+        s_axi_rready <= 1'b0;
         tb_clear_read_addr_q;
         tb_read_model_rst = 1'b1;
         repeat (12) @(posedge dfi_clk);
@@ -1187,8 +1190,8 @@ module tb;
 
         // --- Test 13: same-ID legal response must precede later local SLVERR ---
         tb_flush_axi_rsp;
-        s_axi_bready = 1'b0;
-        s_axi_rready = 1'b0;
+        s_axi_bready <= 1'b0;
+        s_axi_rready <= 1'b0;
         tb_clear_read_addr_q;
         tb_read_model_rst = 1'b1;
         repeat (12) @(posedge dfi_clk);
@@ -1211,7 +1214,7 @@ module tb;
         //     DUT gives wreq priority over rreq (reads only start when wreq is empty),
         //     so interleaved AR/AW would not preserve AR-order == R-order vs scoreboard.
         tb_flush_axi_rsp;
-        s_axi_arvalid = 1'b0;
+        s_axi_arvalid <= 1'b0;
 
         for (tb_rs_op = 0; tb_rs_op < 28; tb_rs_op = tb_rs_op + 1) begin
             tb_rng_step;
