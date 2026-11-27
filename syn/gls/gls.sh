@@ -97,19 +97,32 @@ tb_incs=""; for d in $TB_INCDIR; do tb_incs="$tb_incs -I$d"; done
 
 rc=0
 # TB integer parameter overrides for $TOP, one NAME=VALUE per line (shared by both modes).
-tb_overrides() {  # $1 = TB file
+tb_overrides() {  # $1 = TB file. NAME=VALUE per override; NAME=? if not an integer.
+  # Literal overrides (.NAME(8), .NAME(4'd8)) are taken as-is; .NAME(IDENT) is resolved
+  # through the TB's own `localparam|parameter [integer] IDENT = <int>`; anything else
+  # (expressions, non-integer params) is reported as NAME=?.
+  local nm vl
   awk -v top="$TOP" '
       $0 ~ "^[ \t]*"top"[ \t]*#\\(" {m=1}
       m {
         s=$0;
-        while (match(s,/\.[A-Za-z_][A-Za-z0-9_]*[ \t]*\([ \t]*[0-9][0-9_]*('"'"'[bdhBDH][0-9a-fA-F_]+)?[ \t]*\)/)) {
+        if (match(s,/\)[ \t]*[A-Za-z_][A-Za-z0-9_]*[ \t]*\(/)) s=substr(s,1,RSTART);  # stop at "<inst> ("
+        while (match(s,/\.[A-Za-z_][A-Za-z0-9_]*[ \t]*\([^()]*\)/)) {
           t=substr(s,RSTART,RLENGTH); sub(/^\./,"",t);
-          sub(/[ \t]*\([ \t]*/,"=",t); gsub(/[ \t)]/,"",t);
+          sub(/[ \t]*\([ \t]*/,"=",t); sub(/[ \t]*\)$/,"",t);
           print t; s=substr(s,RSTART+RLENGTH)
         }
       }
       m && /\)[ \t]*[A-Za-z_][A-Za-z0-9_]*[ \t]*\(/ {exit}
-  ' "$1"
+  ' "$1" | while IFS='=' read -r nm vl; do
+    [ -n "$nm" ] || continue
+    if [[ "$vl" =~ ^[0-9][0-9_]*(\'[bdhBDH][0-9a-fA-F_]+)?$ ]]; then echo "$nm=$vl"
+    elif [[ "$vl" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      r="$(grep -oE "(localparam|parameter)[[:space:]]+(integer[[:space:]]+)?$vl[[:space:]]*=[[:space:]]*[0-9][0-9_]*[[:space:]]*[;,)]" "$1" | head -1 | sed -E 's/.*=[[:space:]]*([0-9_]+).*/\1/')"
+      echo "$nm=${r:-?}"
+    else echo "$nm=?"
+    fi
+  done
 }
 for TOP in $TOPS; do
   echo "[GLS] === $TOP ($LABEL) ==="
@@ -134,7 +147,7 @@ for TOP in $TOPS; do
   #    `GLS_CHPARAM_<top>="NAME=VAL …"` (env) supplements / overrides the auto-extraction.
   chp=""
   while IFS='=' read -r nm vl; do
-    [ -n "$nm" ] && chp="$chp chparam -set $nm $vl $TOP;"
+    [ -n "$nm" ] && [ "$vl" != "?" ] && chp="$chp chparam -set $nm $vl $TOP;"
   done < <(tb_overrides "$tb")
   gcv="GLS_CHPARAM_${TOP//[^A-Za-z0-9_]/_}"
   for kv in ${!gcv:-}; do nm="${kv%%=*}"; vl="${kv#*=}"; [ -n "$nm" ] && chp="$chp chparam -set $nm $vl $TOP;"; done
@@ -195,6 +208,10 @@ for TOP in $TOPS; do
     for t in $tbs; do
       while IFS='=' read -r nm vl; do
         [ -n "$nm" ] || continue
+        if [ "$vl" = "?" ]; then
+          echo "[GLS] $TOP: WARNING — $(basename "$t") override of $nm is not an integer/resolvable; NOT checked against the netlist"
+          continue
+        fi
         built=""
         for kv in ${GLS_NETLIST_PARAMS:-}; do [ "${kv%%=*}" = "$nm" ] && built="${kv#*=}"; done
         [ -n "$built" ] || built="$(awk -v n="$nm" '$0 ~ "(^|[ \t])"n"[ \t]*=" { s=$0; sub(/^[^=]*=[ \t]*/,"",s); print s; exit }' "$decls")"
