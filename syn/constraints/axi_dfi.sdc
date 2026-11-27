@@ -21,6 +21,12 @@ set_false_path -from [get_ports axi_aresetn]
 set_false_path -from [get_ports dfi_rst_n]
 
 # I/O budgets (40% in / 40% out), each relative to its own domain clock.
-set_input_delay  -clock axi_aclk [expr {0.40*$AXI_PERIOD}] [remove_from_collection [all_inputs] [get_ports {axi_aclk axi_aresetn dfi_clk dfi_rst_n}]]
+# PrimeTime has remove_from_collection; OpenSTA (LibreLane/OpenROAD) has delete_from_list.
+if {[llength [info commands remove_from_collection]]} {
+  set all_in [remove_from_collection [all_inputs] [get_ports {axi_aclk axi_aresetn dfi_clk dfi_rst_n}]]
+} else {
+  set all_in [delete_from_list [all_inputs] [get_ports {axi_aclk axi_aresetn dfi_clk dfi_rst_n}]]
+}
+set_input_delay  -clock axi_aclk [expr {0.40*$AXI_PERIOD}] $all_in
 set_output_delay -clock axi_aclk [expr {0.40*$AXI_PERIOD}] [all_outputs]
 # (Split outputs per true launch domain at integration; single group shown here.)

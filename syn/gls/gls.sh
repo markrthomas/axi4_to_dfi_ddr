@@ -16,8 +16,13 @@
 # TB is a cocotb/UVM/C++-Verilator harness cannot use this iverilog path as-is — author
 # the Verilator-netlist recipe in T6_PLAN.md and tag the OSS run honestly, never a pass.
 #
-# What this does NOT do (needs a PDK / liberty + a vendor flow — see T6_PLAN.md):
-#   - SDF back-annotated (timing) GLS, or mapping to a real standard-cell library.
+# External-netlist mode (post-route GLS, e.g. a LibreLane sky130 netlist — see
+# templates/signoff/pnr/): set GLS_NETLIST_DIR and the same TBs run against
+# <GLS_NETLIST_DIR>/<top>.nl.v with the given cell models instead of a Yosys netlist.
+# Synthesis and chparam are skipped (the netlist is whatever P&R built, at the RTL
+# defaults), and a missing tool is a FAIL, not a SKIP: that run was asked for explicitly.
+#
+# What this does NOT do: SDF back-annotated (timing) GLS — see T6_PLAN.md.
 #
 # Config (env or edit the defaults below):
 #   TOPS        space-separated top module names
@@ -25,10 +30,21 @@
 #   FRONTEND    "verilog" (read_verilog -sv) | "slang" (read_slang; package-based SV)
 #   RTL_INCDIR  include dir(s) for the yosys RTL read (default: none)
 #   TB_INCDIR   include dir(s) for the iverilog TB compile (default: test)
-#   TB_<top>    per-top self-checking directed TB (default: <TB_INCDIR[0]>/tb_<top>.v)
+#   TB_<top>    per-top self-checking TB(s), space-separated; ALL must pass (default:
+#               <TB_INCDIR[0]>/tb_<top>.v). Add the block's protocol-compliance bench
+#               here: on IP-axi-to-2apbs only the compliance bench caught a pre-fix AW/AR
+#               deadlock at gate level; the directed TB passed. chparam overrides (step
+#               0) are taken from the FIRST TB.
 #   TB_EXTRA    extra non-synth Verilog the TB instantiates (checkers/BFMs) — compiled
 #               WITH the TB + netlist, not synthesized (default: none)
 #   OUT/BUILD   report / build dirs (default syn/gls/reports, syn/gls/build)
+#   External-netlist mode (all optional; GLS_NETLIST_DIR switches it on):
+#   GLS_NETLIST_DIR  dir holding <top>.nl.v (e.g. LibreLane runs/<tag>/final/nl)
+#   GLS_NETLIST_PARAMS "NAME=VAL …" the netlist was built at (beyond the RTL defaults);
+#                    a TB integer override that differs from the built value FAILs.
+#   GLS_CELL_MODELS  cell model files (e.g. sky130_fd_sc_hd primitives.v + cell .v)
+#   GLS_DEFINES      iverilog defines (e.g. "-DFUNCTIONAL -DUNIT_DELAY=#1")
+#   GLS_LABEL        netlist description for the report
 set -euo pipefail
 # --- adopted defaults for axi4_to_dfi_ddr (override via env) ---
 TOPS="${TOPS:-axi4_to_dfi_bridge}"
@@ -37,20 +53,34 @@ FRONTEND="${FRONTEND:-verilog}"
 RTL_INCDIR="${RTL_INCDIR:-src}"
 TB_INCDIR="${TB_INCDIR:-src}"   # directed self-checking TB: src/tb_axi4_to_dfi_bridge.v
 TB_EXTRA="${TB_EXTRA:-}"
-OUT="${OUT:-syn/gls/reports}"; BUILD="${BUILD:-syn/gls/build}"
+EXT=0; [ -n "${GLS_NETLIST_DIR:-}" ] && EXT=1
+OUT="${OUT:-syn/gls/reports}"; BUILD="${BUILD:-syn/gls/build$([ $EXT -eq 1 ] && echo -ext || true)}"
 mkdir -p "$OUT" "$BUILD"
 # Space-join: a newline-separated list (e.g. $(ls …)) is split by the yosys -p parser.
 RTL="$(printf '%s ' $RTL)"
 
-command -v yosys   >/dev/null || { echo "[GLS] yosys not on PATH — SKIP (needs OSS CAD Suite)";   exit 0; }
-command -v iverilog>/dev/null || { echo "[GLS] iverilog not on PATH — SKIP (needs OSS CAD Suite)"; exit 0; }
-command -v vvp     >/dev/null || { echo "[GLS] vvp not on PATH — SKIP (needs OSS CAD Suite)";      exit 0; }
-DAT="$(yosys-config --datdir 2>/dev/null || true)"
-[ -f "$DAT/simcells.v" ] && [ -f "$DAT/simlib.v" ] || { echo "[GLS] yosys simcells.v/simlib.v not found under '$DAT' — SKIP"; exit 0; }
+need() {  # SKIP in generic mode (OSS CAD Suite absent); FAIL in external-netlist mode
+  command -v "$1" >/dev/null && return 0
+  [ $EXT -eq 1 ] && { echo "[GLS] FAIL — $1 not on PATH"; exit 1; }
+  echo "[GLS] $1 not on PATH — SKIP (needs OSS CAD Suite)"; exit 0
+}
+need iverilog; need vvp
+if [ $EXT -eq 1 ]; then
+  : "${GLS_CELL_MODELS:?GLS_CELL_MODELS must list the cell model files}"
+  for f in $GLS_CELL_MODELS; do [ -f "$f" ] || { echo "[GLS] FAIL — cell model $f not found"; exit 1; }; done
+  MODELS="$GLS_CELL_MODELS"; DEFS="${GLS_DEFINES:-}"; LABEL="${GLS_LABEL:-external netlist}"
+else
+  need yosys
+  DAT="$(yosys-config --datdir 2>/dev/null || true)"
+  [ -f "$DAT/simcells.v" ] && [ -f "$DAT/simlib.v" ] || { echo "[GLS] yosys simcells.v/simlib.v not found under '$DAT' — SKIP"; exit 0; }
+  MODELS="$DAT/simcells.v $DAT/simlib.v"; DEFS=""; LABEL="generic Yosys gates (simcells/simlib models)"
+fi
 
 # Frontend / slang detection (integrated in Yosys>=0.67, else plugin, else SKIP honestly).
 rinc=""; for d in $RTL_INCDIR; do rinc="$rinc -I$d"; done
-if [ "$FRONTEND" = slang ]; then
+if [ $EXT -eq 1 ]; then
+  READ=""   # no synthesis in external-netlist mode
+elif [ "$FRONTEND" = slang ]; then
   if yosys -q -p "read_slang" 2>&1 | grep -q "No such command"; then
     if yosys -q -p "plugin -i slang; read_slang" 2>&1 | grep -qE "No such command|Can't load module|cannot open"; then
       echo "[GLS] slang/sv-elab absent — SKIP (needs Yosys>=0.67 integrated, or the slang plugin)"; exit 0
@@ -66,14 +96,33 @@ fi
 tb_incs=""; for d in $TB_INCDIR; do tb_incs="$tb_incs -I$d"; done
 
 rc=0
+# TB integer parameter overrides for $TOP, one NAME=VALUE per line (shared by both modes).
+tb_overrides() {  # $1 = TB file
+  awk -v top="$TOP" '
+      $0 ~ "^[ \t]*"top"[ \t]*#\\(" {m=1}
+      m {
+        s=$0;
+        while (match(s,/\.[A-Za-z_][A-Za-z0-9_]*[ \t]*\([ \t]*[0-9][0-9_]*('"'"'[bdhBDH][0-9a-fA-F_]+)?[ \t]*\)/)) {
+          t=substr(s,RSTART,RLENGTH); sub(/^\./,"",t);
+          sub(/[ \t]*\([ \t]*/,"=",t); gsub(/[ \t)]/,"",t);
+          print t; s=substr(s,RSTART+RLENGTH)
+        }
+      }
+      m && /\)[ \t]*[A-Za-z_][A-Za-z0-9_]*[ \t]*\(/ {exit}
+  ' "$1"
+}
 for TOP in $TOPS; do
-  echo "[GLS] === $TOP ==="
+  echo "[GLS] === $TOP ($LABEL) ==="
   tbv="TB_${TOP//[^A-Za-z0-9_]/_}"; firstinc="${TB_INCDIR%% *}"
-  tb="${!tbv:-$firstinc/tb_$TOP.v}"
-  [ -f "$tb" ] || { echo "[GLS] $TOP: no self-checking directed TB ($tb) — FAIL (set TB_$TOP)"; rc=1; continue; }
+  tbs="${!tbv:-$firstinc/tb_$TOP.v}"; tb="${tbs%% *}"
+  missing=0; for t in $tbs; do [ -f "$t" ] || { echo "[GLS] $TOP: no self-checking TB ($t) — FAIL (set TB_$TOP)"; missing=1; }; done
+  [ $missing -eq 0 ] || { rc=1; continue; }
 
-  net="$BUILD/$TOP.gls.v"; netp="$BUILD/$TOP.gls.param.v"; bin="$BUILD/sim_gls_$TOP"
-  runlog="$OUT/$TOP.gls.log"; rpt="$OUT/$TOP.gls.rpt"
+  net="$BUILD/$TOP.gls.v"; netp="$BUILD/$TOP.gls.param.v"; rpt="$OUT/$TOP.gls.rpt"
+  if [ $EXT -eq 1 ]; then
+    net="$GLS_NETLIST_DIR/$TOP.nl.v"
+    [ -f "$net" ] || { echo "[GLS] $TOP: FAIL — netlist $net not found"; rc=1; continue; }
+  else
 
   # 0) a directed TB may instantiate the DUT with BEHAVIOURAL parameter overrides (not
   #    just widths). `synth` constant-folds params to the value present AT SYNTH TIME, so
@@ -86,18 +135,7 @@ for TOP in $TOPS; do
   chp=""
   while IFS='=' read -r nm vl; do
     [ -n "$nm" ] && chp="$chp chparam -set $nm $vl $TOP;"
-  done < <(awk -v top="$TOP" '
-      $0 ~ "^[ \t]*"top"[ \t]*#\\(" {m=1}
-      m {
-        s=$0;
-        while (match(s,/\.[A-Za-z_][A-Za-z0-9_]*[ \t]*\([ \t]*[0-9][0-9_]*('"'"'[bdhBDH][0-9a-fA-F_]+)?[ \t]*\)/)) {
-          t=substr(s,RSTART,RLENGTH); sub(/^\./,"",t);
-          sub(/[ \t]*\([ \t]*/,"=",t); gsub(/[ \t)]/,"",t);
-          print t; s=substr(s,RSTART+RLENGTH)
-        }
-      }
-      m && /\)[ \t]*[A-Za-z_][A-Za-z0-9_]*[ \t]*\(/ {exit}
-  ' "$tb")
+  done < <(tb_overrides "$tb")
   gcv="GLS_CHPARAM_${TOP//[^A-Za-z0-9_]/_}"
   for kv in ${!gcv:-}; do nm="${kv%%=*}"; vl="${kv#*=}"; [ -n "$nm" ] && chp="$chp chparam -set $nm $vl $TOP;"; done
 
@@ -114,6 +152,7 @@ for TOP in $TOPS; do
     echo "[GLS] $TOP: FAIL — synthesis error (see $BUILD/$TOP.synth.log)"; rc=1; continue
   fi
   [ -n "$chp" ] && echo "[GLS] $TOP: synthesized at TB param overrides:$(echo "$chp" | sed -E 's/chparam -set //g; s/ '"$TOP"';/ /g')"
+  fi   # end generic-netlist synthesis (steps 0-1)
 
   # 2) synth constant-folds the top's parameters away; a directed TB may instantiate
   #    the DUT with named param overrides (at the RTL defaults). Re-insert the RTL
@@ -138,42 +177,71 @@ for TOP in $TOPS; do
   ' "$topsrc" > "$decls"
   if [ -s "$decls" ]; then
     awk -v top="$TOP" -v df="$decls" 'BEGIN{d=0}
-      $0 ~ "^module "top"\\(" {m=1}
+      $0 ~ "^[ \t]*module[ \t]+"top"[ \t]*\\(" {m=1}
       {print}
-      m && !d && /\);[ \t]*$/ { while((getline p < df) > 0) print "  parameter " p ";"; d=1; m=0 }
+      m && !d && /\);[ \t\r]*$/ { while((getline p < df) > 0) print "  parameter " p ";"; d=1; m=0 }
     ' "$net" > "$netp"
   else
     cp "$net" "$netp"
   fi
 
-  # 3) compile the self-checking TB (+ any non-synth checkers/BFMs it instantiates)
-  #    against the gate netlist + Yosys sim models.
-  if ! iverilog -g2012 $tb_incs -o "$bin" "$tb" $TB_EXTRA "$netp" "$DAT/simcells.v" "$DAT/simlib.v" 2> "$BUILD/$TOP.iverilog.log"; then
-    echo "[GLS] $TOP: FAIL — gate-level compile error (see $BUILD/$TOP.iverilog.log):"
-    grep -iE 'error:' "$BUILD/$TOP.iverilog.log" | head; rc=1; continue
+  # 2b) external netlist: its parameters were fixed when it was built (RTL defaults plus
+  #     GLS_NETLIST_PARAMS="NAME=VAL …", e.g. LibreLane SYNTH_PARAMETERS). The shim above
+  #     makes a TB override legal but INERT, so a TB override that differs from the built
+  #     value would silently test different hardware: FAIL instead. Values are compared as
+  #     plain integer literals (sized literals / expressions are compared as text).
+  if [ $EXT -eq 1 ]; then
+    pm=0
+    for t in $tbs; do
+      while IFS='=' read -r nm vl; do
+        [ -n "$nm" ] || continue
+        built=""
+        for kv in ${GLS_NETLIST_PARAMS:-}; do [ "${kv%%=*}" = "$nm" ] && built="${kv#*=}"; done
+        [ -n "$built" ] || built="$(awk -v n="$nm" '$0 ~ "(^|[ \t])"n"[ \t]*=" { s=$0; sub(/^[^=]*=[ \t]*/,"",s); print s; exit }' "$decls")"
+        [ "${built//_/}" = "${vl//_/}" ] && continue
+        echo "[GLS] $TOP: FAIL — $(basename "$t") overrides $nm=$vl but the netlist was built at $nm=${built:-<unknown>}" \
+             "(rebuild it at the TB value, e.g. LibreLane SYNTH_PARAMETERS + GLS_NETLIST_PARAMS)"
+        pm=1
+      done < <(tb_overrides "$t")
+    done
+    [ $pm -eq 0 ] || { rc=1; continue; }
   fi
 
-  # 4) run; the TB is self-checking. PASS requires: the sim reaches an explicit $finish
-  #    (Icarus prints "$finish called at …"), prints a PASSED line, and prints no
-  #    FAIL/ERROR/MISMATCH.
-  vvp "$bin" > "$runlog" 2>&1 || true
-  # PASS token is a whole word (\b…\b excludes BYPASS etc.); matches PASS, PASS:, PASSED.
-  # Exclusion is substring FAIL/ERROR/MISMATCH (SLVERR ≠ ERROR, so AXI err names are safe).
-  if grep -qiE '\bPASS(ED)?\b' "$runlog" \
-     && ! grep -qiE 'FAIL|ERROR|MISMATCH' "$runlog" \
-     && grep -qE '\$finish' "$runlog"; then
-    {
-      echo "# $TOP — gate-level simulation report (T6, OSS zero-delay GLS)"
-      echo "# generated $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-      echo "  netlist ........... generic Yosys gates (simcells/simlib models)"
-      echo "  testbench ......... $tb (self-checking directed)"
-      echo "  result ............ PASS ($(grep -iE '\bPASS(ED)?\b' "$runlog" | head -1 | sed 's/^[[:space:]]*//'))"
-    } > "$rpt"
-    echo "[GLS] $TOP: PASS — gate-level netlist simulates clean (report: $rpt)"
-  else
-    echo "[GLS] $TOP: FAIL — gate-level sim did not pass (see $runlog):"
-    tail -15 "$runlog"; rc=1
-  fi
+  # 3) compile + run each self-checking TB (+ any non-synth checkers/BFMs it
+  #    instantiates) against the netlist + cell models. PASS requires, per TB: the sim
+  #    reaches an explicit $finish (Icarus prints "$finish called at …"), prints a
+  #    PASSED line, and prints no FAIL/ERROR/MISMATCH.
+  results=""; top_ok=1
+  for t in $tbs; do
+    nm="$(basename "$t" .v)"; bin="$BUILD/sim_gls_${TOP}_$nm"; runlog="$OUT/$TOP.$nm.gls.log"
+    if ! iverilog -g2012 $DEFS $tb_incs -o "$bin" "$t" $TB_EXTRA "$netp" $MODELS 2> "$BUILD/$TOP.$nm.iverilog.log"; then
+      echo "[GLS] $TOP/$nm: FAIL — gate-level compile error (see $BUILD/$TOP.$nm.iverilog.log):"
+      grep -iE 'error' "$BUILD/$TOP.$nm.iverilog.log" | head; top_ok=0
+      results="$results\n  testbench ......... $t: FAIL (compile)"; continue
+    fi
+    vvp -n "$bin" > "$runlog" 2>&1 || true
+    # PASS token is a whole word (\b…\b excludes BYPASS etc.); matches PASS, PASS:, PASSED.
+    # Exclusion is substring FAIL/ERROR/MISMATCH (SLVERR ≠ ERROR, so AXI err names are safe).
+    if grep -qiE '\bPASS(ED)?\b' "$runlog" \
+       && ! grep -qiE 'FAIL|ERROR|MISMATCH' "$runlog" \
+       && grep -qE '\$finish' "$runlog"; then
+      echo "[GLS] $TOP/$nm: PASS"
+      results="$results\n  testbench ......... $t: PASS ($(grep -iE '\bPASS(ED)?\b' "$runlog" | head -1 | sed 's/^[[:space:]]*//'))"
+    else
+      echo "[GLS] $TOP/$nm: FAIL — gate-level sim did not pass (see $runlog):"
+      tail -15 "$runlog"; top_ok=0
+      results="$results\n  testbench ......... $t: FAIL (see $(basename "$runlog"))"
+    fi
+  done
+  {
+    echo "# $TOP — gate-level simulation report (T6, functional GLS)"
+    echo "# generated $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "  netlist ........... $LABEL$([ $EXT -eq 1 ] && echo " ($net)")"
+    [ -n "$DEFS" ] && echo "  defines ........... $DEFS"
+    printf '%b\n' "${results#\\n}"
+    echo "  result ............ $([ $top_ok -eq 1 ] && echo PASS || echo FAIL)"
+  } > "$rpt"
+  [ $top_ok -eq 1 ] && echo "[GLS] $TOP: PASS (report: $rpt)" || rc=1
 done
-[ $rc -eq 0 ] && echo "[GLS] T6 gate-level simulation PASSED (OSS zero-delay; SDF-timing GLS + real PPA = needs-pdk)."
+[ $rc -eq 0 ] && echo "[GLS] T6 gate-level simulation PASSED ($LABEL; SDF-timing GLS = separate step)."
 exit $rc

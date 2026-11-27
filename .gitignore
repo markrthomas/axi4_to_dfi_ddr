@@ -31,3 +31,8 @@ sim/synth_netlist.v
 syn/gls/build/
 syn/gls/reports/
 syn/ppa/reports/
+syn/dft/reports/
+syn/pnr/reports/
+syn/pnr/*/runs/
+.cache/
+dist/

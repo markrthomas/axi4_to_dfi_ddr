@@ -1,0 +1,22 @@
+{
+  "//": "LibreLane config for axi4_to_dfi_bridge on sky130A / sky130_fd_sc_hd (kit templates/signoff/pnr/). Two async clocks: CLOCK_PORT is the AXI clock; the SDC declares both (axi_aclk 2.5 ns, dfi_clk 1.25 ns placeholders) and cuts the crossing.",
+  "PDK": "sky130A",
+  "STD_CELL_LIBRARY": "sky130_fd_sc_hd",
+  "DESIGN_NAME": "axi4_to_dfi_bridge",
+  "VERILOG_FILES": [
+    "dir::../../../src/cdc_fifo_lib.v",
+    "dir::../../../src/mc_dfi_scheduler.v",
+    "dir::../../../src/axi4_bridge_frontend.v",
+    "dir::../../../src/dfi_adapter.v",
+    "dir::../../../src/axi4_to_dfi_bridge.v"
+  ],
+  "//params": "Built at the directed TB's override (tb_axi4_to_dfi_bridge: DFI_INIT_START_CYCLES=4) so post-route GLS tests the routed hardware; at the RTL default 0 the init-start counter is pruned. gls.sh FAILs a TB/netlist parameter mismatch.",
+  "SYNTH_PARAMETERS": ["DFI_INIT_START_CYCLES=4"],
+  "CLOCK_PORT": "axi_aclk",
+  "CLOCK_PERIOD": 2.5,
+  "PNR_SDC_FILE": "dir::../../constraints/axi_dfi.sdc",
+  "SIGNOFF_SDC_FILE": "dir::../../constraints/axi_dfi.sdc",
+  "FP_CORE_UTIL": 40,
+  "//setup": "[\"\"] = LibreLane's setup checker matches no corner ([] would fall back to the PDK default tt); summarize.py reports setup (PNR_SETUP_GATE=1 makes it fail). LibreLane's hold checker stays on (all corners).",
+  "SETUP_VIOLATION_CORNERS": [""]
+}

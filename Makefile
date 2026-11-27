@@ -203,4 +203,33 @@ stress:
 	@echo "[STRESS] n/a: no stress/randomized tier in this repo yet (see DV_STANDARDS.md)"
 
 # shared swarm/infra targets (markrthomas/dv-swarm-kit)
+# --- T7 full XSD validation + release bundle; T2/T6 sky130 silicon run (kit templates/signoff/) ---
+include pkg/pkg-xsd.mk
+RELEASE_OUT ?= dist
+REL_NAME := axi4-to-dfi-ddr
+PNR_TOPS ?= axi4_to_dfi_bridge
+.PHONY: release release-verify release-check pnr gls-sky130
+
+release:
+	@test -n "$(VERSION)" || { echo "usage: make release VERSION=x.y.z"; exit 2; }
+	python3 $(CURDIR)/scripts/make_release.py --version $(VERSION) --out $(RELEASE_OUT) $(if $(ALLOW_DIRTY),--allow-dirty)
+
+release-verify:
+	@test -n "$(VERSION)" || { echo "usage: make release-verify VERSION=x.y.z"; exit 2; }
+	python3 $(CURDIR)/scripts/make_release.py --verify $(RELEASE_OUT)/$(REL_NAME)-$(VERSION).tar.gz
+
+# Dry run (CI): two builds must be byte-identical and verify. Not a release (T0 open).
+release-check:
+	python3 $(CURDIR)/scripts/make_release.py --version 0.0.0-ci --out /tmp/rel-a $(if $(ALLOW_DIRTY),--allow-dirty)
+	python3 $(CURDIR)/scripts/make_release.py --version 0.0.0-ci --out /tmp/rel-b $(if $(ALLOW_DIRTY),--allow-dirty)
+	cmp /tmp/rel-a/$(REL_NAME)-0.0.0-ci.tar.gz /tmp/rel-b/$(REL_NAME)-0.0.0-ci.tar.gz && echo "[REL] reproducible: two builds are byte-identical"
+	python3 $(CURDIR)/scripts/make_release.py --verify /tmp/rel-a/$(REL_NAME)-0.0.0-ci.tar.gz
+
+# Heavy (LibreLane in Docker, ~GBs): run in CI (.github/workflows/silicon.yml), not locally.
+pnr:
+	@for t in $(or $(TOP),$(PNR_TOPS)); do bash $(CURDIR)/syn/pnr/run_pnr.sh $$t || exit 1; done
+
+gls-sky130:
+	@for t in $(or $(TOP),$(PNR_TOPS)); do bash $(CURDIR)/syn/pnr/gls_sky130.sh $$t || exit 1; done
+
 include swarm.mk
